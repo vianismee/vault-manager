@@ -1,0 +1,302 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   VAULT DESIGN SYSTEM
+   Anthropic-inspired warm neutral palette
+   ============================================ */
+
+@layer base {
+  :root {
+    /* Warm Light Mode */
+    --background: 45 20% 98%;           /* Warm cream */
+    --foreground: 30 25% 15%;            /* Nearly black warm */
+    --card: 0 0% 100%;                   /* Pure white */
+    --card-foreground: 30 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 30 25% 15%;
+
+    /* Primary: Terracotta accent */
+    --primary: 10 60% 62%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: Warm beige */
+    --secondary: 45 30% 94%;
+    --secondary-foreground: 30 25% 15%;
+
+    /* Muted: Subtle warm gray */
+    --muted: 45 20% 92%;
+    --muted-foreground: 30 15% 45%;
+
+    /* Accent: Soft coral */
+    --accent: 10 55% 94%;
+    --accent-foreground: 10 60% 50%;
+
+    /* Destructive: Muted red */
+    --destructive: 5 70% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders: Very subtle warm */
+    --border: 45 15% 85%;
+    --input: 45 15% 88%;
+    --ring: 10 60% 62%;
+
+    /* Radius */
+    --radius: 0.75rem;
+
+    /* Custom semantic colors */
+    --success: 142 76% 36%;
+    --warning: 38 92% 50%;
+    --info: 199 89% 48%;
+  }
+
+  .dark {
+    /* Warm Dark Mode */
+    --background: 30 8% 12%;            /* Warm charcoal */
+    --foreground: 45 20% 92%;            /* Warm off-white */
+    --card: 30 10% 16%;                  /* Slightly lighter */
+    --card-foreground: 45 20% 92%;
+    --popover: 30 10% 16%;
+    --popover-foreground: 45 20% 92%;
+
+    /* Primary: Warmer terracotta for dark */
+    --primary: 10 55% 65%;
+    --primary-foreground: 30 10% 12%;
+
+    /* Secondary: Deep warm gray */
+    --secondary: 30 10% 20%;
+    --secondary-foreground: 45 20% 92%;
+
+    /* Muted: Subtle warm gray */
+    --muted: 30 10% 22%;
+    --muted-foreground: 45 15% 55%;
+
+    /* Accent: Warm highlight */
+    --accent: 10 40% 25%;
+    --accent-foreground: 10 55% 65%;
+
+    /* Destructive: Muted red for dark */
+    --destructive: 5 65% 55%;
+    --destructive-foreground: 30 8% 12%;
+
+    /* Borders: Subtle warm */
+    --border: 30 15% 22%;
+    --input: 30 15% 22%;
+    --ring: 10 55% 65%;
+
+    /* Custom semantic colors - dark mode */
+    --success: 142 71% 45%;
+    --warning: 38 92% 60%;
+    --info: 199 89% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-variation-settings: "opsz" auto;
+    letter-spacing: -0.01em;
+    line-height: 1.6;
+  }
+
+  /* Typography Scale */
+  h1 {
+    @apply text-4xl font-display font-normal tracking-tight;
+    line-height: 1.2;
+  }
+
+  h2 {
+    @apply text-2xl font-display font-normal tracking-tight;
+    line-height: 1.3;
+  }
+
+  h3 {
+    @apply text-xl font-medium tracking-tight;
+    line-height: 1.4;
+  }
+
+  p {
+    @apply text-[15px] leading-relaxed;
+  }
+
+  /* Focus states */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+@layer utilities {
+  /* Subtle border utility */
+  .border-subtle {
+    @apply border border-border/60;
+  }
+
+  /* Fade in animation */
+  .fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Staggered children animation */
+  .stagger-children > * {
+    animation: fadeIn 0.4s ease-out forwards;
+    opacity: 0;
+  }
+  .stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-children > *:nth-child(2) { animation-delay: 50ms; }
+  .stagger-children > *:nth-child(3) { animation-delay: 100ms; }
+  .stagger-children > *:nth-child(4) { animation-delay: 150ms; }
+  .stagger-children > *:nth-child(5) { animation-delay: 200ms; }
+  .stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+
+  /* Container */
+  .container-main {
+    @apply max-w-5xl mx-auto px-5 sm:px-6;
+  }
+
+  /* Semantic colors */
+  .text-success {
+    color: hsl(var(--success));
+  }
+  .text-warning {
+    color: hsl(var(--warning));
+  }
+  .text-info {
+    color: hsl(var(--info));
+  }
+  .bg-success {
+    background-color: hsl(var(--success));
+  }
+  .bg-warning {
+    background-color: hsl(var(--warning));
+  }
+  .bg-info {
+    background-color: hsl(var(--info));
+  }
+}
+
+/* ============================================
+   COMPONENT STYLES
+   ============================================ */
+
+@layer components {
+  /* Card variants */
+  .card-elevated {
+    @apply bg-card border border-border/60 rounded-xl shadow-sm;
+  }
+
+  .card-flat {
+    @apply bg-card border border-border/40 rounded-xl;
+  }
+
+  .card-interactive {
+    @apply bg-card border border-border/40 rounded-xl cursor-pointer transition-all duration-200;
+    @apply hover:border-border/80 hover:shadow-sm;
+  }
+
+  /* Input variants */
+  .input-clean {
+    @apply h-11 px-4 bg-background border border-border/60 rounded-lg;
+    @apply text-foreground placeholder:text-muted-foreground;
+    @apply focus:border-ring/60 focus:ring-1 focus:ring-ring/20;
+    @apply transition-all duration-150;
+    @apply text-[15px];
+  }
+
+  /* Button variants */
+  .btn-primary {
+    @apply h-11 px-5 bg-primary text-primary-foreground rounded-lg;
+    @apply font-medium text-[15px];
+    @apply hover:opacity-90 active:opacity-80;
+    @apply transition-opacity duration-150;
+    @apply focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+
+  .btn-ghost {
+    @apply h-11 px-5 bg-transparent text-foreground rounded-lg;
+    @apply font-medium text-[15px];
+    @apply hover:bg-muted/50;
+    @apply transition-colors duration-150;
+  }
+
+  .btn-secondary {
+    @apply h-11 px-5 bg-secondary text-secondary-foreground rounded-lg;
+    @apply font-medium text-[15px];
+    @apply hover:bg-secondary/80;
+    @apply transition-colors duration-150;
+  }
+
+  /* Safe area utilities for PWA */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* ============================================
+   CUSTOM SCROLLBAR
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/30;
+}
+
+/* ============================================
+   SELECTION
+   ============================================ */
+
+::selection {
+  @apply bg-primary/20 text-foreground;
+}
+
+::-moz-selection {
+  @apply bg-primary/20 text-foreground;
+}
