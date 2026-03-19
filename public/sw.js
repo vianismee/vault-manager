@@ -2,8 +2,8 @@
 
 declare const self: ServiceWorkerGlobalScope;
 
-const CACHE_NAME = "vault-v1";
-const urlsToCache = ["/", "/auth/login", "/vault/mobile", "/manifest.json"];
+const CACHE_NAME = "vault-v2";
+const urlsToCache = ["/", "/auth/login", "/vault/mobile", "/vault/app", "/manifest.json"];
 
 self.addEventListener("install", (event: ExtendableEvent) => {
   event.waitUntil(

@@ -58,9 +58,11 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="manifest" href="/manifest.json" />
-        <link rel="apple-touch-icon" href="/icon-192.png" />
+        <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png" />
+        <link rel="icon" sizes="192x192" href="/icon-192.png" />
+        <link rel="icon" sizes="512x512" href="/icon-512.png" />
         <meta name="theme-color" content="#e67c50" />
-        <link rel="icon" href="/favicon.ico" />
       </head>
       <body
         className={`${inter.variable} ${instrument.variable} ${geist.variable} font-sans antialiased`}

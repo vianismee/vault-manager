@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { supabase } from "@/lib/supabase";
 import { Shield, Plus, Search, User, Key, Folder, X, Eye, EyeOff, Copy, Check, LogOut, Edit, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { decrypt } from "@/lib/encryption";
 import { TOTPDisplay } from "@/components/totp/totp-display";
 import { getFaviconUrl, generatePlaceholder } from "@/lib/icons";
 import { PWAInstallPrompt } from "@/components/pwa-install-prompt";
+import { usePasswords } from "@/lib/realtime/hooks";
+import { supabase } from "@/lib/supabase";
 
 interface Credential {
   id: string;
@@ -29,73 +30,51 @@ type Tab = "vault" | "search" | "settings";
 export default function MobileVaultPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>("vault");
-  const [credentials, setCredentials] = useState<Credential[]>([]);
+  const { data: rawCredentials, loading } = usePasswords();
+  
+  const mappedCredentials: Credential[] = (rawCredentials || []).map((cred: any) => ({
+    id: cred.id,
+    title: cred.title,
+    username: cred.username,
+    passwordEncrypted: cred.encrypted_password,
+    websiteUrl: cred.url,
+    totpSecret: cred.totp_secret,
+    notes: cred.notes,
+    category: cred.category_id || "general",
+    createdAt: cred.created_at,
+    updatedAt: cred.updated_at,
+  }));
+
   const [filteredCredentials, setFilteredCredentials] = useState<Credential[]>([]);
   const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // Filter credentials whenever search, category, or data changes
   useEffect(() => {
-    fetchCredentials();
-  }, []);
+    let filtered = mappedCredentials;
 
-  useEffect(() => {
+    // Filter by search query
     if (searchQuery) {
-      const filtered = credentials.filter(
+      filtered = filtered.filter(
         (cred) =>
           cred.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
           cred.username?.toLowerCase().includes(searchQuery.toLowerCase())
       );
-      setFilteredCredentials(filtered);
-    } else {
-      setFilteredCredentials(credentials);
     }
-  }, [searchQuery, credentials]);
 
-  const fetchCredentials = async () => {
-    try {
-      setLoading(true);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push("/auth/login");
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("passwords")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("updated_at", { ascending: false });
-
-      if (error) throw error;
-
-      const mappedData: Credential[] = (data || []).map((cred: any) => ({
-        id: cred.id,
-        title: cred.title,
-        username: cred.username,
-        passwordEncrypted: cred.encrypted_password,
-        websiteUrl: cred.url,
-        totpSecret: cred.totp_secret,
-        notes: cred.notes,
-        category: cred.category_id || "general",
-        createdAt: cred.created_at,
-        updatedAt: cred.updated_at,
-      }));
-
-      setCredentials(mappedData);
-      setFilteredCredentials(mappedData);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to fetch credentials");
-    } finally {
-      setLoading(false);
+    // Filter by category
+    if (selectedCategory) {
+      filtered = filtered.filter((cred) => cred.category === selectedCategory);
     }
-  };
+
+    setFilteredCredentials(filtered);
+  }, [searchQuery, selectedCategory, rawCredentials]);
+
+
 
   const handleCopy = async (text: string, label: string) => {
     await navigator.clipboard.writeText(text);
@@ -108,7 +87,6 @@ export default function MobileVaultPage() {
     try {
       const { error } = await supabase.from("passwords").delete().eq("id", id);
       if (error) throw error;
-      setCredentials(credentials.filter((c) => c.id !== id));
       setShowDetail(false);
       toast.success("Deleted successfully");
     } catch (error: any) {
@@ -122,9 +100,9 @@ export default function MobileVaultPage() {
   };
 
   const stats = [
-    { label: "Passwords", value: credentials.length, icon: Shield, color: "bg-primary/10 text-primary" },
-    { label: "2FA", value: credentials.filter((c) => c.totpSecret).length, icon: Key, color: "bg-muted text-foreground" },
-    { label: "Categories", value: new Set(credentials.map((c) => c.category)).size, icon: Folder, color: "bg-muted text-foreground" },
+    { label: "Passwords", value: mappedCredentials.length, icon: Shield, color: "bg-primary/10 text-primary" },
+    { label: "2FA", value: mappedCredentials.filter((c) => c.totpSecret).length, icon: Key, color: "bg-muted text-foreground" },
+    { label: "Categories", value: new Set(mappedCredentials.map((c) => c.category)).size, icon: Folder, color: "bg-muted text-foreground" },
   ];
 
   // Render content based on active tab
@@ -229,7 +207,7 @@ export default function MobileVaultPage() {
           <div className="flex items-center justify-center h-64">
             <div className="h-8 w-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
           </div>
-        ) : credentials.length === 0 ? (
+        ) : mappedCredentials.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full px-8 text-center">
             <div className="h-20 w-20 rounded-3xl bg-muted flex items-center justify-center mb-4">
               <Shield className="h-10 w-10 text-muted-foreground" />
@@ -259,6 +237,34 @@ export default function MobileVaultPage() {
                 );
               })}
             </div>
+
+            {/* Category Filter */}
+            {mappedCredentials.length > 0 && (
+              <div className="px-4 pb-2">
+                <div className="flex gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
+                  <CategoryChip
+                    label="All"
+                    selected={!selectedCategory}
+                    onClick={() => setSelectedCategory(null)}
+                  />
+                  {Array.from(new Set(mappedCredentials.map((c) => c.category))).map((cat) => (
+                    <CategoryChip
+                      key={cat}
+                      label={cat}
+                      selected={selectedCategory === cat}
+                      onClick={() => setSelectedCategory(cat)}
+                    />
+                  ))}
+                  <Link
+                    href="/settings"
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-muted text-muted-foreground text-sm whitespace-nowrap"
+                  >
+                    <Folder className="h-3.5 w-3.5" />
+                    Manage
+                  </Link>
+                </div>
+              </div>
+            )}
 
             {/* Passwords */}
             <div className="px-4 pb-4">
@@ -565,5 +571,29 @@ function MobileDetailModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// Category Filter Chip
+function CategoryChip({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 rounded-full text-sm whitespace-nowrap transition-colors ${
+        selected
+          ? "bg-primary text-primary-foreground"
+          : "bg-muted text-muted-foreground hover:bg-muted/70"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

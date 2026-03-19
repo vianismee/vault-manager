@@ -6,15 +6,19 @@ import { supabase } from "@/lib/supabase";
 import { encrypt } from "@/lib/encryption";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Eye, EyeOff, Loader2 } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Folder, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { PasswordGenerator, getPasswordStrength } from "@/components/password/password-generator";
+import { CategorySelect } from "@/components/categories/category-select";
+import { CategoryManager } from "@/components/categories/category-manager";
 
 export default function NewCredentialPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showTotpSecret, setShowTotpSecret] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: "",
     username: "",
@@ -45,7 +49,7 @@ export default function NewCredentialPage() {
         url: formData.websiteUrl || null,
         totp_secret: formData.totpSecret || null,
         notes: formData.notes || null,
-        category_id: null,
+        category_id: selectedCategoryId,
       });
 
       if (error) throw error;
@@ -192,6 +196,27 @@ export default function NewCredentialPage() {
               />
             </div>
 
+            {/* Category */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Category
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setCategoryManagerOpen(true)}
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <Settings className="h-3 w-3" />
+                  Manage
+                </button>
+              </div>
+              <CategorySelect
+                value={selectedCategoryId}
+                onChange={setSelectedCategoryId}
+              />
+            </div>
+
             {/* TOTP Secret */}
             <div className="space-y-1.5">
               <label htmlFor="totpSecret" className="text-sm font-medium">
@@ -263,6 +288,13 @@ export default function NewCredentialPage() {
           </form>
         </div>
       </main>
+
+      {/* Category Manager Dialog */}
+      <CategoryManager
+        open={categoryManagerOpen}
+        onOpenChange={setCategoryManagerOpen}
+        onCategoriesChange={() => router.refresh()}
+      />
     </div>
   );
 }

@@ -6,10 +6,12 @@ import { supabase } from "@/lib/supabase";
 import { encrypt, decrypt } from "@/lib/encryption";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Eye, EyeOff, Loader2 } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Folder, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { PasswordGenerator, getPasswordStrength } from "@/components/password/password-generator";
 import { PasswordFormSkeleton } from "@/components/vault/vault-skeleton";
+import { CategorySelect } from "@/components/categories/category-select";
+import { CategoryManager } from "@/components/categories/category-manager";
 
 export default function EditCredentialPage() {
   const router = useRouter();
@@ -20,6 +22,8 @@ export default function EditCredentialPage() {
   const [saving, setSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showTotpSecret, setShowTotpSecret] = useState(false);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: "",
     username: "",
@@ -70,6 +74,7 @@ export default function EditCredentialPage() {
         totpSecret: data.totp_secret || "",
         notes: data.notes || "",
       });
+      setSelectedCategoryId(data.category_id || null);
     } catch (error: any) {
       toast.error(error.message || "Failed to fetch password");
       router.push("/vault");
@@ -100,6 +105,7 @@ export default function EditCredentialPage() {
           url: formData.websiteUrl || null,
           totp_secret: formData.totpSecret || null,
           notes: formData.notes || null,
+          category_id: selectedCategoryId,
           updated_at: new Date().toISOString(),
         })
         .eq("id", id)
@@ -272,6 +278,27 @@ export default function EditCredentialPage() {
               />
             </div>
 
+            {/* Category */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">
+                  Category
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setCategoryManagerOpen(true)}
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <Settings className="h-3 w-3" />
+                  Manage
+                </button>
+              </div>
+              <CategorySelect
+                value={selectedCategoryId}
+                onChange={setSelectedCategoryId}
+              />
+            </div>
+
             {/* TOTP Secret */}
             <div className="space-y-1.5">
               <label htmlFor="totpSecret" className="text-sm font-medium">
@@ -347,6 +374,13 @@ export default function EditCredentialPage() {
           </form>
         </div>
       </main>
+
+      {/* Category Manager Dialog */}
+      <CategoryManager
+        open={categoryManagerOpen}
+        onOpenChange={setCategoryManagerOpen}
+        onCategoriesChange={() => router.refresh()}
+      />
     </div>
   );
 }

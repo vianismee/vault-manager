@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_transfers: {
+        Row: {
+          id: string
+          from_user_id: string
+          to_email: string
+          to_user_id: string | null
+          encrypted_data: string
+          status: string | null
+          message: string | null
+          created_at: string | null
+          expires_at: string | null
+        }
+        Insert: {
+          id?: string
+          from_user_id: string
+          to_email: string
+          to_user_id?: string | null
+          encrypted_data: string
+          status?: string | null
+          message?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+        }
+        Update: {
+          id?: string
+          from_user_id?: string
+          to_email?: string
+          to_user_id?: string | null
+          encrypted_data?: string
+          status?: string | null
+          message?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_transfers_from_user_id_fkey"
+            columns: ["from_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "account_transfers_to_user_id_fkey"
+            columns: ["to_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       categories: {
         Row: {
           color: string | null
@@ -112,6 +163,73 @@ export type Database = {
           },
         ]
       }
+      shared_credentials: {
+        Row: {
+          id: string
+          credential_id: string | null
+          from_user_id: string
+          to_user_id: string
+          to_email: string
+          permission: string | null
+          encrypted_data: string | null
+          status: string | null
+          message: string | null
+          created_at: string | null
+          updated_at: string | null
+          expires_at: string | null
+        }
+        Insert: {
+          id?: string
+          credential_id?: string | null
+          from_user_id: string
+          to_user_id: string
+          to_email: string
+          permission?: string | null
+          encrypted_data?: string | null
+          status?: string | null
+          message?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+          expires_at?: string | null
+        }
+        Update: {
+          id?: string
+          credential_id?: string | null
+          from_user_id?: string
+          to_user_id?: string
+          to_email?: string
+          permission?: string | null
+          encrypted_data?: string | null
+          status?: string | null
+          message?: string | null
+          created_at?: string | null
+          updated_at?: string | null
+          expires_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "shared_credentials_credential_id_fkey"
+            columns: ["credential_id"]
+            isOneToOne: false
+            referencedRelation: "passwords"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shared_credentials_from_user_id_fkey"
+            columns: ["from_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "shared_credentials_to_user_id_fkey"
+            columns: ["to_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       user_profiles: {
         Row: {
           avatar_url: string | null
@@ -147,7 +265,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      lookup_user_by_email: {
+        Args: {
+          email: string
+        }
+        Returns: {
+          id: string
+          email: string
+        }
+      }
     }
     Enums: {
       [_ in never]: never
