@@ -64,7 +64,7 @@ export default function NewCredentialPage() {
     <div className="min-h-screen bg-background flex">
 
       {/* ── Sidebar ─────────────────────────────── */}
-      <aside className="hidden md:flex w-60 shrink-0 border-r border-border/50 bg-card flex-col sticky top-0 h-screen">
+      <aside className="hidden lg:flex w-60 shrink-0 border-r border-border/50 bg-card flex-col sticky top-0 h-screen">
         <div className="flex items-center gap-2.5 px-5 h-14 border-b border-border/40">
           <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shrink-0">
             <Shield className="h-3.5 w-3.5 text-primary-foreground" />
@@ -103,32 +103,32 @@ export default function NewCredentialPage() {
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
 
         {/* Top bar */}
-        <header className="sticky top-0 z-10 bg-background border-b border-border/50 px-4 md:px-8 h-14 flex items-center gap-4">
+        <header className="sticky top-0 z-10 bg-background border-b border-border/50 px-4 md:px-8 h-14 flex items-center gap-2 md:gap-4">
           <button
             onClick={() => router.back()}
-            className="flex items-center gap-1.5 font-accent text-sm text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 font-accent text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Back
+            <span className="hidden sm:inline">Back</span>
           </button>
-          <ChevronRight className="h-3.5 w-3.5 text-border" />
-          <span className="font-accent text-sm text-foreground font-medium">New Password</span>
+          <ChevronRight className="h-3.5 w-3.5 text-border shrink-0" />
+          <span className="font-accent text-sm text-foreground font-medium truncate">New Password</span>
         </header>
 
         {/* Form */}
-        <main className="flex-1 px-4 md:px-8 py-6 md:py-8">
+        <main className="flex-1 px-4 md:px-8 py-5 md:py-8 pb-24 md:pb-8">
           <form onSubmit={handleSubmit} className="max-w-2xl mx-auto">
 
             {/* Page heading */}
-            <div className="mb-8">
-              <h2 className="font-display mb-1">Add new password</h2>
-              <p className="font-accent text-[15px] text-muted-foreground">
+            <div className="mb-5 md:mb-8">
+              <h2 className="font-display text-2xl md:text-3xl mb-1">Add new password</h2>
+              <p className="font-accent text-sm md:text-[15px] text-muted-foreground">
                 All fields are encrypted before leaving your device.
               </p>
             </div>
 
             {/* ── Section 1: Basic Info ── */}
-            <div className="surface-card p-4 md:p-6 mb-4">
+            <div className="surface-card p-4 md:p-6 mb-3 md:mb-4">
               <p className="section-label mb-4">Basic Info</p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -204,7 +204,7 @@ export default function NewCredentialPage() {
             </div>
 
             {/* ── Section 2: Password ── */}
-            <div className="surface-card p-4 md:p-6 mb-4">
+            <div className="surface-card p-4 md:p-6 mb-3 md:mb-4">
               <p className="section-label mb-4">Password</p>
 
               <div className="space-y-4">
@@ -259,7 +259,7 @@ export default function NewCredentialPage() {
             </div>
 
             {/* ── Section 3: 2FA + Notes ── */}
-            <div className="surface-card p-4 md:p-6 mb-6">
+            <div className="surface-card p-4 md:p-6 mb-4 md:mb-6">
               <p className="section-label mb-4">Security & Notes</p>
 
               <div className="space-y-4">
@@ -310,17 +310,18 @@ export default function NewCredentialPage() {
               </div>
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-3">
+            {/* Actions — stack on mobile, row on desktop */}
+            <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2.5 sm:gap-3">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => router.push("/vault")}
                 disabled={loading}
+                className="w-full sm:w-auto"
               >
                 Cancel
               </Button>
-              <Button type="submit" className="btn-primary px-8" disabled={loading}>
+              <Button type="submit" className="btn-primary w-full sm:w-auto sm:px-8" disabled={loading}>
                 {loading ? (
                   <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Saving...</>
                 ) : (
