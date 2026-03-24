@@ -1,14 +1,21 @@
 import type { Metadata } from "next";
-import { Inter, Instrument_Serif, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Instrument_Serif, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { QueryProvider } from "@/components/query-provider";
 import { Toaster } from "@/components/ui/toaster";
 import { ServiceWorkerProvider } from "@/components/service-worker-provider";
 
-const inter = Inter({
+const geistSans = Geist({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-geist-sans",
+  display: "swap",
+  preload: true,
+});
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-geist-mono",
   display: "swap",
   preload: true,
 });
@@ -21,9 +28,9 @@ const instrument = Instrument_Serif({
   preload: true,
 });
 
-const geist = Geist_Mono({
+const jakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  variable: "--font-geist",
+  variable: "--font-jakarta",
   display: "swap",
   preload: true,
 });
@@ -65,7 +72,7 @@ export default function RootLayout({
         <meta name="theme-color" content="#e67c50" />
       </head>
       <body
-        className={`${inter.variable} ${instrument.variable} ${geist.variable} font-sans antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${instrument.variable} ${jakarta.variable} font-sans antialiased`}
       >
         <ThemeProvider
           attribute="class"
