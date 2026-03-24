@@ -151,12 +151,12 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen min-h-dvh bg-background flex-col">
       {/* Header */}
-      <header className="border-b border-border/40 py-4 pt-safe-top shrink-0">
-        <div className="flex items-center justify-center gap-2 max-w-[420px] mx-auto px-5">
-          <div className="w-8 h-8 rounded-xl bg-primary flex items-center justify-center shadow-sm shadow-primary/20">
-            <Lock className="h-4 w-4 text-primary-foreground" />
+      <header className="border-b border-border/50 pt-safe-top shrink-0">
+        <div className="flex items-center justify-center gap-2.5 h-14 max-w-[420px] mx-auto px-5">
+          <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center">
+            <Lock className="h-3.5 w-3.5 text-primary-foreground" />
           </div>
-          <span className="font-display text-lg tracking-tight">Vault</span>
+          <span className="font-display text-base">Vault</span>
         </div>
       </header>
 
@@ -168,45 +168,45 @@ export default function LoginPage() {
           transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
           className="w-full max-w-[420px] mx-auto"
         >
-          <div className="mb-8 text-center">
-            <h1 className="text-2xl sm:text-3xl font-display mb-2">
+          <div className="mb-7 text-center">
+            <h2 className="font-display mb-2">
               {mode === "signup" ? "Create Account" : "Welcome Back"}
-            </h1>
-            <p className="text-muted-foreground text-sm sm:text-base">
+            </h2>
+            <p className="font-accent text-[15px] text-muted-foreground">
               {mode === "signup"
                 ? "Sign up to get started with your secure password vault"
                 : "Sign in to access your secure password vault"}
             </p>
           </div>
 
-          <div className="card-elevated p-6 sm:p-8">
+          <div className="surface-card p-6 sm:p-8">
             {!sent ? (
               <>
                 {/* Auth Mode Tabs */}
                 {mode !== "signup" && (
-                  <div className="flex gap-1.5 p-1 bg-muted/50 rounded-lg mb-6">
+                  <div className="flex gap-1 p-1 bg-muted/60 rounded-lg mb-6">
                     <button
                       type="button"
                       onClick={() => setMode("magic")}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 sm:px-4 rounded-md text-sm font-medium transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 sm:px-4 rounded-md font-accent text-sm font-medium transition-all ${
                         mode === "magic"
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground hover:bg-background/50"
                       }`}
                     >
-                      <Mail className="h-4 w-4" />
+                      <Mail className="h-3.5 w-3.5" />
                       <span className="hidden sm:inline">Magic link</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setMode("password")}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 sm:px-4 rounded-md text-sm font-medium transition-all ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 sm:px-4 rounded-md font-accent text-sm font-medium transition-all ${
                         mode === "password"
                           ? "bg-background text-foreground shadow-sm"
                           : "text-muted-foreground hover:text-foreground hover:bg-background/50"
                       }`}
                     >
-                      <Lock className="h-4 w-4" />
+                      <Lock className="h-3.5 w-3.5" />
                       <span className="hidden sm:inline">Password</span>
                     </button>
                   </div>
@@ -225,14 +225,14 @@ export default function LoginPage() {
                       className="space-y-4"
                     >
                       <div>
-                        <label className="block text-sm font-medium mb-2">Email</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Email</label>
                         <Input
                           type="email"
                           placeholder="you@example.com"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           required
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                       </div>
                       <Button
@@ -267,18 +267,18 @@ export default function LoginPage() {
                       className="space-y-4"
                     >
                       <div>
-                        <label className="block text-sm font-medium mb-2">Email</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Email</label>
                         <Input
                           type="email"
                           placeholder="you@example.com"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           required
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium mb-2">Password</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Password</label>
                         <Input
                           type="password"
                           placeholder="•••••••••"
@@ -286,7 +286,7 @@ export default function LoginPage() {
                           onChange={(e) => setPassword(e.target.value)}
                           required
                           minLength={6}
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                       </div>
                       <Button
@@ -327,28 +327,28 @@ export default function LoginPage() {
                       className="space-y-4"
                     >
                       <div>
-                        <label className="block text-sm font-medium mb-2">Full name</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Full name</label>
                         <Input
                           type="text"
                           placeholder="John Doe"
                           value={fullName}
                           onChange={(e) => setFullName(e.target.value)}
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium mb-2">Email</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Email</label>
                         <Input
                           type="email"
                           placeholder="you@example.com"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           required
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium mb-2">Password</label>
+                        <label className="block font-accent text-xs font-semibold tracking-wide text-muted-foreground mb-1.5">Password</label>
                         <Input
                           type="password"
                           placeholder="•••••••••"
@@ -356,7 +356,7 @@ export default function LoginPage() {
                           onChange={(e) => setPassword(e.target.value)}
                           required
                           minLength={6}
-                          className="input-clean"
+                          className="input-refined w-full"
                         />
                         <p className="text-xs text-muted-foreground mt-1.5">Minimum 6 characters</p>
                       </div>
@@ -399,8 +399,8 @@ export default function LoginPage() {
                 <div className="w-14 h-14 mx-auto rounded-full bg-primary/10 flex items-center justify-center mb-5">
                   <Mail className="h-7 w-7 text-primary" />
                 </div>
-                <h3 className="text-xl font-display mb-2">Check your email</h3>
-                <p className="text-muted-foreground text-sm sm:text-base">
+                <h3 className="font-display text-xl mb-2">Check your email</h3>
+                <p className="font-accent text-[15px] text-muted-foreground">
                   We sent a magic link to <strong>{email}</strong>. Click the link in the email to sign in.
                 </p>
                 <Button
@@ -418,7 +418,7 @@ export default function LoginPage() {
           </div>
 
           {/* Footer text */}
-          <p className="text-center text-xs text-muted-foreground mt-6 pb-safe-bottom">
+          <p className="text-center font-accent text-xs text-muted-foreground mt-6 pb-safe-bottom">
             By continuing, you agree to our Terms of Service and Privacy Policy.
           </p>
         </motion.div>

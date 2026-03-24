@@ -202,13 +202,13 @@ export default function MobileVaultPage() {
 
     // Vault tab (default)
     return (
-      <div className="flex-1 overflow-y-auto pb-24">
+      <div className="flex-1 flex flex-col overflow-y-auto pb-24">
         {loading ? (
           <div className="flex items-center justify-center h-64">
             <div className="h-8 w-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
           </div>
         ) : mappedCredentials.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full px-8 text-center">
+          <div className="flex-1 flex flex-col items-center justify-center px-8 text-center">
             <div className="h-20 w-20 rounded-3xl bg-muted flex items-center justify-center mb-4">
               <Shield className="h-10 w-10 text-muted-foreground" />
             </div>
