@@ -395,10 +395,13 @@ src/lib/crypto/
   ├── seedphrase.ts      — BIP-39 generate, validate, entropy extraction
   ├── hd-keys.ts         — HD key derivation (BIP-32 inspired)
   ├── keypair.ts         — Ed25519 keypair derivation, sign, verify; X25519 ECDH untuk sharing
-  ├── block-cipher.ts    — AES-256-GCM encrypt/decrypt per block
+  ├── block-cipher.ts    — AES-256-GCM encrypt/decrypt, non-extractable CryptoKey management
   ├── chain.ts           — Block creation, chain assembly, integrity + signature verification
+  ├── secure-enclave.ts  — WebAuthn credential binding, key wrapping/unwrapping (Secure Enclave)
+  ├── session-guard.ts   — Auto-lock timer, Page Visibility listener, memory scrubbing
   ├── sharing.ts         — Ephemeral ECDH credential sharing (F8)
-  ├── device-auth.ts     — Device keypair, authorization & revoke flow (F9)
+  ├── device-auth.ts     — Device keypair, authorization, revoke & emergency kill (F9, F10)
+  ├── canary.ts          — Canary block injection & monitoring (F11)
   ├── sss.ts             — Shamir's Secret Sharing split/combine
   └── index.ts           — Public API exports
 ```
@@ -428,6 +431,340 @@ Verify chain integrity
     ├── FAIL ──▶ Tampilkan tamper alert, read-only mode
     │
     └── PASS ──▶ Decrypt & replay blocks ──▶ Render vault state
+```
+
+---
+
+## Keamanan Device & Threat Model
+
+### Threat Tier Matrix
+
+Sebelum membahas mitigasi, penting untuk mendefinisikan **level ancaman** secara jelas:
+
+```
+┌──────┬──────────────────────────────────────────┬────────────────────────────────┐
+│ Tier │ Skenario                                  │ Dampak Tanpa Mitigasi          │
+├──────┼──────────────────────────────────────────┼────────────────────────────────┤
+│  T1  │ Server Supabase diretas                   │ ✅ Aman — data encrypted,      │
+│      │                                           │    server tidak tahu kuncinya  │
+├──────┼──────────────────────────────────────────┼────────────────────────────────┤
+│  T2  │ Device hilang/dicuri, layar terkunci      │ ⚠️  Tergantung kekuatan PIN    │
+│      │                                           │    dan Secure Enclave          │
+├──────┼──────────────────────────────────────────┼────────────────────────────────┤
+│  T3  │ Device hilang/dicuri, layar tidak terkunci│ ⚠️  Vault aktif terekspos jika │
+│      │ tapi vault sedang terkunci (auto-lock)    │    auto-lock belum berjalan    │
+├──────┼──────────────────────────────────────────┼────────────────────────────────┤
+│  T4  │ Remote backdoor / malware aktif           │ ❌  Keylogger, memory dump,    │
+│      │                                           │    clipboard hijack            │
+├──────┼──────────────────────────────────────────┼────────────────────────────────┤
+│  T5  │ Device dicuri, vault terbuka,             │ ❌  Worst case — semua plaintext│
+│      │ seedphrase tersimpan di device            │    credential terekspos        │
+└──────┴──────────────────────────────────────────┴────────────────────────────────┘
+```
+
+Zero-knowledge architecture **hanya melindungi T1 secara native**. T2–T5 membutuhkan lapisan mitigasi di sisi client.
+
+---
+
+### Mitigasi T2 & T3 — Device Hilang / Dicuri
+
+#### 1. Remote Device Revoke (Ekstensi F9)
+
+Dari device lain yang masih dipercaya, owner mengirim signed revoke message:
+
+```
+[Device Terpercaya]
+        │
+        │ 1. Sign revoke payload:
+        │    { device_id, revoked_at, reason } + Ed25519(vault_privkey)
+        │
+        ▼
+   Server Supabase
+        │
+        │ 2. Verifikasi signature dengan vault public key
+        │ 3. Set revoked_at pada authorized_devices
+        │ 4. Tolak semua request dari device_pubkey tersebut
+        │
+        ▼
+   [Device yang Dicuri] → 401 Unauthorized untuk semua fetch blocks
+```
+
+**Penting**: Karena private key tersimpan di Secure Enclave device yang dicuri, attacker **tidak bisa membuat signature baru** yang valid — tapi jika vault sudah terbuka saat pencurian, data yang sudah di-decrypt di memori tetap terekspos (T5).
+
+#### 2. Secure Enclave / TPM Key Binding
+
+Kunci vault tidak disimpan sebagai raw bytes di IndexedDB. Sebaliknya, kunci dibungkus (**key wrapping**) menggunakan kunci yang terikat ke hardware device:
+
+```
+Seedphrase → derive vault_key (AES-256)
+                    │
+                    ▼ wrap dengan device_bound_key
+                    │
+            wrapped_vault_key ──▶ disimpan di IndexedDB
+                    │
+           device_bound_key = WebAuthn credential key
+                              (tinggal di Secure Enclave, tidak bisa di-export)
+```
+
+Saat vault dibuka di device yang sama:
+```
+WebAuthn authenticate (biometric/PIN) → release device_bound_key
+    │
+    ▼ unwrap
+    │
+vault_key (hanya tersedia di memori, non-exportable CryptoKey)
+```
+
+Efek: **mencuri file IndexedDB saja tidak cukup** — penyerang juga harus melewati biometrik / PIN device.
+
+#### 3. Auto-Lock & Key Lifetime
+
+```
+Vault terbuka:
+  CryptoKey objects hidup di memory (extractable: false)
+  Raw bytes TIDAK pernah ada di JS variable
+
+Trigger auto-lock (salah satu dari):
+  • Inactivity timeout (default: 5 menit, configurable)
+  • Tab/window minimized > threshold
+  • Device screen lock event
+  • User klik "Lock Vault"
+
+Saat lock:
+  CryptoKey references = null
+  GC → keys hilang dari memory
+  IndexedDB cache: wrapped_vault_key tetap ada, tapi tidak berguna tanpa biometrik
+```
+
+---
+
+### Mitigasi T4 — Remote Backdoor / Malware
+
+Ini threat yang paling kompleks karena attacker sudah **berada di dalam device**. Strategi pertahanan berlapis:
+
+#### Layer 1 — Non-Extractable CryptoKey (Web Crypto API)
+
+Ini perlindungan paling fundamental. Semua kunci kriptografi dibuat dengan flag `extractable: false`:
+
+```typescript
+// SALAH — key bisa dibaca dari JS:
+const rawKey = new Uint8Array([...]);
+// attacker bisa console.log(rawKey)
+
+// BENAR — key tidak bisa dibaca dari JS:
+const cryptoKey = await crypto.subtle.importKey(
+  'raw',
+  rawKeyBytes,
+  { name: 'AES-GCM' },
+  false,          // extractable: false ← kunci tidak bisa di-export/dibaca
+  ['encrypt', 'decrypt']
+);
+rawKeyBytes.fill(0); // zero-out raw bytes setelah import
+// cryptoKey.extractable === false
+// tidak ada cara di JS untuk mendapatkan raw bytes kembali
+```
+
+Bahkan jika malware menginjeksi script dan mengakses `cryptoKey` object, `crypto.subtle.exportKey()` akan throw `DOMException: key is not extractable`.
+
+#### Layer 2 — Content Security Policy (CSP)
+
+Mencegah injeksi script dari luar (XSS, supply chain attack):
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' 'sha256-<hash>';   ← hanya script dengan hash ini yang boleh jalan
+  connect-src 'self' https://*.supabase.co;
+  style-src 'self' 'unsafe-inline';
+  object-src 'none';
+  base-uri 'self';
+```
+
+#### Layer 3 — Subresource Integrity (SRI)
+
+Setiap script eksternal harus memiliki hash yang diverifikasi browser:
+
+```html
+<script
+  src="https://cdn.example.com/lib.js"
+  integrity="sha384-<hash>"
+  crossorigin="anonymous">
+</script>
+```
+
+Jika CDN di-compromise dan script dimodifikasi → browser menolak menjalankannya.
+
+#### Layer 4 — Seedphrase Input Protection
+
+Seedphrase adalah titik paling rentan (single point of keylogging). Mitigasi:
+
+```
+Opsi 1 — Virtual Keyboard Acak:
+  Tampilkan on-screen keyboard dengan layout tombol yang di-randomize setiap kali
+  → keylogger fisik/software tidak bisa merekam posisi tombol yang sama
+
+Opsi 2 — WebAuthn sebagai pengganti seedphrase (untuk re-open vault):
+  Seedphrase hanya diinput SEKALI saat onboarding / recovery
+  Setelahnya: biometrik / PIN device membuka wrapped_vault_key
+  → seedphrase tidak pernah diketik lagi dalam penggunaan sehari-hari
+
+Opsi 3 — Clipboard-free input:
+  Field seedphrase tidak mengizinkan paste (preventDefault pada paste event)
+  → malware clipboard sniffer tidak dapat intercept
+```
+
+#### Layer 5 — Memory Scrubbing
+
+Setelah kunci digunakan, raw bytes di-zero-out secara eksplisit:
+
+```typescript
+// Setelah derive keys dari seedphrase:
+seedphraseBytes.fill(0);     // zero-out seedphrase bytes
+masterSeedBytes.fill(0);     // zero-out master seed
+// Hanya CryptoKey objects (non-extractable) yang bertahan di memori
+```
+
+#### Layer 6 — Clipboard Auto-Clear
+
+Password dan OTP yang di-copy ke clipboard otomatis dihapus:
+
+```typescript
+navigator.clipboard.writeText(password);
+setTimeout(() => {
+  navigator.clipboard.writeText(''); // clear setelah 30 detik
+}, 30_000);
+```
+
+---
+
+### Mitigasi T5 — Vault Terbuka, Device Dicuri
+
+Ini skenario terburuk. Mitigasinya adalah **memperkecil jendela eksposur**:
+
+1. **Aggressive auto-lock**: default 2 menit inactivity (bukan 5) untuk password manager
+2. **Screen-aware locking**: gunakan Page Visibility API — vault langsung lock saat tab tidak aktif
+3. **Panic button**: shortcut keyboard (misal `Ctrl+Shift+L`) yang langsung lock vault
+4. **Remote emergency lock**: dari device lain, kirim signed "force-lock" event → server memblokir session JWT device tersebut
+
+---
+
+### F10 — Emergency Kill Switch (Remote Wipe)
+
+Jika situasi sudah sangat buruk (device dicuri dan tidak bisa di-revoke tepat waktu):
+
+```
+[Device Terpercaya / Web Interface]
+        │
+        │ Owner kirim signed emergency command:
+        │ { action: "EMERGENCY_WIPE", chain_id, timestamp }
+        │ + Ed25519(vault_privkey)
+        │
+        ▼
+   Server Supabase
+        │
+        ├── Verifikasi signature
+        ├── Set vault status = FROZEN
+        ├── Revoke SEMUA authorized_devices
+        ├── Invalidate SEMUA active sessions (JWT blocklist)
+        └── Kirim email notifikasi ke owner
+        │
+        ▼
+   Semua device → 403 Forbidden
+
+Untuk membuka kembali:
+  Owner input seedphrase dari device baru → vault di-unfreeze
+  (seedphrase = ultimate authority)
+```
+
+**Yang TIDAK dilakukan**: chain blocks TIDAK dihapus dari server. Data tetap aman dan ter-enkripsi — hanya akses yang diblokir. Owner dengan seedphrase selalu bisa recovery.
+
+---
+
+### F11 — Canary Block (Honeypot Tamper Detection)
+
+Teknik dari dunia threat intelligence. Sisipkan "credential palsu" yang tidak pernah digunakan di dalam chain:
+
+```
+Block #3: CREATE credential "canary-aws-prod" (fake AWS key yang terlihat nyata)
+          ← user tidak melihat ini di UI, disembunyikan dengan flag canary: true
+
+Monitoring:
+  Jika credential "canary-aws-prod" pernah digunakan di AWS (CloudTrail alert)
+  → VAULT TELAH DIKOMPROMIS — attacker berhasil decrypt dan mencuri credential
+  → Trigger emergency response otomatis
+```
+
+Canary block ter-enkripsi seperti block normal. Attacker tidak bisa membedakan mana yang asli dan mana yang canary sebelum mendekripsi. Setelah mendekripsi dan "mencoba" credential canary, alarm berbunyi.
+
+---
+
+### Updated Client State Flow (dengan Security Layers)
+
+```
+App Start
+    │
+    ▼
+Cek session JWT (valid?)
+    │
+    ├── NO  ──▶ Magic link auth
+    │
+    └── YES
+         │
+         ▼
+    Vault locked? ──▶ YES ──▶ WebAuthn biometric / PIN
+         │                          │
+         │                          ▼ unwrap vault key (Secure Enclave)
+         │                          │
+         └── NO (active session) ───┘
+                    │
+                    ▼
+         Fetch chain_blocks dari server
+                    │
+                    ▼
+         Verify chain integrity + Ed25519 signatures
+                    │
+                    ├── FAIL ──▶ Tamper alert, read-only mode, notifikasi email
+                    │
+                    └── PASS
+                          │
+                          ▼
+                   Decrypt & replay blocks (non-extractable CryptoKey)
+                          │
+                          ▼
+                   Render vault state
+                          │
+                          ▼
+                   Start auto-lock timer + Page Visibility listener
+```
+
+---
+
+### Updated Schema (Security Tables)
+
+```sql
+-- Freeze/emergency state
+ALTER TABLE vault_chains ADD COLUMN
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'frozen'));
+
+-- Session tracking untuk remote kill
+CREATE TABLE vault_sessions (
+  id           UUID PRIMARY KEY,
+  chain_id     UUID REFERENCES vault_chains(id),
+  device_id    UUID REFERENCES authorized_devices(id),
+  jwt_jti      TEXT UNIQUE NOT NULL,  -- JWT ID untuk blocklist
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  revoked_at   TIMESTAMPTZ            -- null = masih aktif
+);
+
+-- Canary credential registry (server-side, tidak di-sync ke client biasa)
+CREATE TABLE canary_blocks (
+  id           UUID PRIMARY KEY,
+  chain_id     UUID REFERENCES vault_chains(id),
+  block_index  BIGINT NOT NULL,
+  alert_email  TEXT NOT NULL,
+  triggered_at TIMESTAMPTZ            -- null = belum terpicu
+);
 ```
 
 ---
@@ -462,6 +799,9 @@ Verify chain integrity
 | **Kompleksitas implementasi** | Jauh lebih kompleks dari CRUD biasa. Perlu crypto module yang solid dan diuji secara ekstensif. |
 | **Key rotation** | Jika private key terekspos, semua signature lama tetap valid. Mitigasi: buat keypair baru, tandatangani ulang HEAD block sebagai "key rotation event", invalidasi keypair lama di server. |
 | **Public key discovery** | Untuk F8 (vault sharing), user perlu tahu public key penerima. Perlu mekanisme directory sederhana (user share vault address mereka secara manual). |
+| **WebAuthn browser support** | Secure Enclave via WebAuthn membutuhkan browser modern + hardware yang support (TouchID, Windows Hello, YubiKey). Fallback: PIN-based key wrapping dengan Argon2id. |
+| **Canary false positives** | Credential canary yang "bocor" bisa terjadi karena breach di sisi layanan target (misal AWS breach), bukan karena vault dikompromis. Investigasi manual tetap diperlukan. |
+| **T5 tidak bisa di-mitigasi sepenuhnya** | Jika vault aktif dan device dicuri secara fisik, data yang sudah di-decrypt di memori tidak bisa diselamatkan. Auto-lock agresif adalah mitigasi terbaik yang mungkin. |
 
 ---
 
@@ -483,10 +823,15 @@ Phase 2 — Data Layer
   ✦ API endpoints: fetch blocks, append block
   ✦ Client-side chain replay engine
 
-Phase 3 — Auth Flow Refactor
+Phase 3 — Auth Flow & Device Security
   ✦ Onboarding UI: seedphrase generation & confirmation
-  ✦ Login UI: seedphrase input modal
-  ✦ Recovery flow
+  ✦ Login UI: WebAuthn biometric / PIN (seedphrase hanya untuk recovery)
+  ✦ Secure Enclave key wrapping via WebAuthn
+  ✦ Auto-lock timer + Page Visibility API
+  ✦ Remote device revoke UI
+  ✦ Emergency Kill Switch UI (F10)
+  ✦ Canary block setup & monitoring (F11)
+  ✦ CSP headers + SRI implementation
 
 Phase 4 — Advanced Features
   ✦ Version history UI (F3)
@@ -518,3 +863,7 @@ Phase 5 — Keypair & Social Features
 - [`@noble/curves`](https://github.com/paulmillr/noble-curves) — Ed25519 & X25519 yang audited, zero-dependency
 - [Ed25519 RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) — EdDSA signature standard
 - [X25519 / ECDH RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) — Elliptic curve Diffie-Hellman untuk key exchange
+- [WebAuthn / FIDO2 Spec](https://www.w3.org/TR/webauthn-3/) — Secure Enclave key binding via browser
+- [SubtleCrypto.importKey()](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/importKey) — Non-extractable CryptoKey API
+- [Page Visibility API](https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API) — Trigger auto-lock saat tab tidak aktif
+- [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/) — XSS & script injection prevention
