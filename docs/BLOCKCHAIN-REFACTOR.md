@@ -26,6 +26,8 @@ Akses ke seluruh vault tidak lagi bergantung pada email magic link semata, melai
 | Tidak ada autentikasi identitas pengirim block | Setiap block ditandatangani dengan private key; siapa pun bisa verifikasi dengan public key |
 | Berbagi credential antar user tidak aman | Enkripsi dengan public key penerima — hanya penerima yang bisa dekripsi |
 | Multi-device butuh seedphrase dikirim ulang | Device baru diotorisasi via keypair; seedphrase tidak perlu berpindah |
+| Signature rentan terhadap quantum computer (Shor's algorithm) | Hybrid signature: Ed25519 (classical) + SPHINCS+ (post-quantum) secara paralel |
+| Enkripsi AES-256 tidak cukup di era quantum | AES-256 tetap aman (Grover's algorithm hanya efektif setara AES-128); ECDH diganti ML-KEM |
 
 ---
 
@@ -36,20 +38,25 @@ Akses ke seluruh vault tidak lagi bergantung pada email magic link semata, melai
 Setiap credential entry direpresentasikan sebagai sebuah block:
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   BLOCK N                        │
-├─────────────────────────────────────────────────┤
-│  block_index     : number                        │
-│  timestamp       : ISO 8601                      │
-│  prev_hash       : SHA-256(Block N-1)            │
-│  nonce           : random bytes (16)             │
-│  payload         : AES-256-GCM(credential_data) │
-│  block_hash      : SHA-256(semua field di atas)  │
-│  signature       : Ed25519Sign(block_hash, privKey) │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                        BLOCK N                            │
+├──────────────────────────────────────────────────────────┤
+│  block_index     : number                                 │
+│  timestamp       : ISO 8601                               │
+│  prev_hash       : SHA-256(Block N-1)                     │
+│  nonce           : random bytes (16)                      │
+│  payload         : AES-256-GCM(credential_data)          │
+│  block_hash      : SHA-256(semua field di atas)           │
+│  signature       : Ed25519Sign(block_hash, privKey)       │  ← classical
+│  signature_pq    : SPHINCS+Sign(block_hash, pq_privKey)  │  ← post-quantum
+└──────────────────────────────────────────────────────────┘
 ```
 
-Field `signature` ditambahkan: block ditandatangani dengan **private key** vault. Siapapun yang memiliki **public key** bisa memverifikasi bahwa block ini benar-benar dibuat oleh pemilik vault — tanpa perlu tahu isi payload.
+**Dual signature (hybrid)**: setiap block ditandatangani dua kali secara paralel.
+- `signature` — Ed25519 (64 bytes), cepat, diverifikasi hari ini
+- `signature_pq` — SPHINCS+-SHA2-256s (7,856 bytes), quantum-resistant, diverifikasi sekarang dan di masa depan
+
+`signature_pq` bersifat **opsional pada Phase 1** — block lama tetap valid tanpa field ini. Saat Phase 2 aktif, semua block baru wajib menyertakan keduanya. Siapapun yang memiliki **public key** bisa memverifikasi bahwa block ini benar-benar dibuat oleh pemilik vault — tanpa perlu tahu isi payload.
 
 **Genesis Block** (Block 0) adalah block khusus yang menyimpan metadata vault (dibuat saat vault pertama kali diinisialisasi) dengan `prev_hash = "0000...0000"`.
 
@@ -173,6 +180,197 @@ Ed25519 dipilih karena:
 - Tidak rentan terhadap nonce reuse attack (deterministik by design)
 - Didukung natively di Web Crypto API (`sign/verify` dengan `Ed25519`)
 - Konversi ke X25519 untuk ECDH (key exchange) sangat mudah — satu keypair bisa melayani keduanya
+
+---
+
+### 6. Post-Quantum Cryptography Layer (SPHINCS+ / SLH-DSA)
+
+#### Mengapa Relevan untuk Password Manager?
+
+Password manager menyimpan data yang bersifat **long-lived** — credential bisa aktif 10–20 tahun. Ini menciptakan kerentanan yang disebut **"Harvest Now, Decrypt Later" (HNDL)**:
+
+```
+Hari ini (2026):
+  Penyerang merekam dan menyimpan:
+    ✦ Encrypted chain blocks dari server
+    ✦ Signed block headers (untuk verifikasi identitas di masa depan)
+    ✦ Encrypted vault snapshots
+
+2030-2035 (quantum computer tersedia):
+  Shor's algorithm memecahkan:
+    ✗ Ed25519 private key dari public key yang terekam
+    ✗ X25519 ECDH shared secret dari key exchange yang terekam
+
+  Attacker kini bisa:
+    ✓ Memalsukan signature block (seolah dari vault owner)
+    ✓ Mendekripsi vault sharing yang pernah dikirim
+    ✓ Mengimpersonasi identitas vault
+```
+
+**AES-256-GCM tetap aman** — Grover's algorithm (quantum) hanya efektif mengurangi keamanan AES-256 menjadi setara AES-128. Ini masih dianggap aman secara praktis. Yang perlu diganti adalah **komponen asimetris**: Ed25519 signature dan X25519 ECDH.
+
+---
+
+#### SPHINCS+ / SLH-DSA — Gambaran Teknis
+
+SPHINCS+ (Stateless Hash-based Signature Scheme) adalah **FIPS 205 (SLH-DSA)**, standar resmi NIST 2024 untuk post-quantum digital signature. Keamanannya hanya bergantung pada ketahanan hash function (SHA-256/SHAKE256) terhadap collision — bukan elliptic curve.
+
+```
+Quantum attack surface:
+                      Shor's     Grover's
+  Ed25519             ❌ RUSAK    -
+  X25519 ECDH         ❌ RUSAK    -
+  AES-256-GCM         -           ⚠️ 128-bit efektif (masih aman)
+  SHA-256             -           ⚠️ 128-bit collision (masih aman)
+  SPHINCS+-SHA2-256s  ✅ AMAN     ✅ AMAN
+  ML-KEM-768 (Kyber)  ✅ AMAN     ✅ AMAN
+```
+
+Varian SPHINCS+ yang dipilih: **SPHINCS+-SHA2-256s** (small variant)
+- Ukuran signature: 7,856 bytes
+- Signing: ~6 operasi/detik di browser (WASM)
+- Verification: ~130 operasi/detik di browser (WASM)
+- Security level: 128-bit post-quantum (setara AES-128 terhadap quantum)
+
+---
+
+#### ML-KEM (Kyber) — Pengganti X25519 untuk Vault Sharing
+
+Selain signature, **key encapsulation** (digunakan di F8 — Vault Sharing) juga perlu diupgrade. X25519 ECDH dipecahkan oleh Shor's algorithm. Penggantinya adalah **ML-KEM-768 (CRYSTALS-Kyber)** — FIPS 203, standar NIST 2024:
+
+```
+Sebelum (F8 — Vault Sharing):
+  Alice  →  X25519 ECDH(ephemeral_privkey, Bob_pubkey)  →  shared_secret
+                    ↑ quantum-vulnerable
+
+Sesudah (F8 post-quantum):
+  Alice  →  ML-KEM-768.Encapsulate(Bob_kem_pubkey)  →  (ciphertext, shared_secret)
+  Bob    →  ML-KEM-768.Decapsulate(Bob_kem_privkey, ciphertext)  →  shared_secret
+                    ↑ quantum-resistant (FIPS 203)
+```
+
+---
+
+#### Hybrid Signature Scheme — Arsitektur Lengkap
+
+Rekomendasi industri (termasuk dari NIST dan IETF) selama masa transisi adalah **hybrid**: gabungkan classical dan post-quantum secara paralel. Keamanan hybrid = max(keamanan classical, keamanan post-quantum).
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              HYBRID SIGNATURE CONSTRUCTION                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  message = block_hash (SHA-256, 32 bytes)                   │
+│                                                             │
+│  sig_classical = Ed25519.sign(message, ed25519_privkey)     │
+│                  → 64 bytes                                  │
+│                                                             │
+│  sig_pq        = SPHINCS+.sign(message, sphincs_privkey)    │
+│                  → 7,856 bytes                               │
+│                                                             │
+│  signature_bundle = sig_classical || sig_pq                 │
+│                  → 7,920 bytes total                         │
+│                                                             │
+│  Verify: VALID jika Ed25519 VALID && SPHINCS+ VALID         │
+│  (kedua-duanya harus valid untuk block diterima)            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Derivasi Keypair Post-Quantum dari Seedphrase
+
+Path derivasi baru di bawah `m/pq/`:
+
+```
+Master Seed (dari seedphrase BIP-39)
+        │
+        ├─── m/identity/0      →  Ed25519 keypair (classical signing)
+        │
+        ├─── m/pq/sign/0       →  SPHINCS+ keypair (post-quantum signing)
+        │
+        └─── m/pq/kem/0        →  ML-KEM-768 keypair (post-quantum key encapsulation)
+                                   ↑ menggantikan X25519 untuk vault sharing (F8)
+```
+
+Semua keypair diturunkan deterministik dari seedphrase yang sama. Seedphrase yang sama → keypair yang sama, selalu.
+
+---
+
+#### Storage Impact & Mitigasi
+
+Ukuran signature SPHINCS+ yang besar (7,856 bytes) perlu dimitigasi:
+
+```
+Tanpa mitigasi — 1,000 blocks:
+  Ed25519 signatures:   1,000 × 64 B     =    64 KB
+  SPHINCS+ signatures:  1,000 × 7,856 B  =  7.7 MB
+  Total:                                 =  7.76 MB (signature saja)
+
+Strategi mitigasi:
+
+  1. Signature Compression (zstd):
+     SPHINCS+ signature sangat compressible (~60% reduction)
+     → 7,856 B → ~3,100 B setelah compress
+     → 1,000 blocks = ~3 MB (masih signifikan)
+
+  2. Detached Signature Store:
+     Simpan signature_pq di tabel terpisah (chain_pq_signatures)
+     Client hanya fetch saat melakukan full integrity audit
+     Normal operation hanya verifikasi Ed25519
+
+  3. Periodic PQ Anchor Block:
+     Tidak setiap block perlu signature_pq individual
+     Setiap N block (misal N=50), buat "anchor block" yang
+     menandatangani merkle root dari 50 block sebelumnya
+     dengan SPHINCS+ — satu signature cover banyak block
+     → 1,000 blocks / 50 = 20 SPHINCS+ signatures = 153 KB
+```
+
+**Rekomendasi**: gunakan **PQ Anchor Block** (strategi 3) — efisien secara storage tapi tetap memberikan quantum-resistant integrity proof untuk seluruh chain.
+
+---
+
+#### Migration Path: 3 Phase Transition
+
+```
+Phase PQ-1 — Classical + Reserved (Sekarang)
+  ✦ Ed25519 sebagai satu-satunya signature
+  ✦ Field signature_pq ada tapi null
+  ✦ Schema sudah siap untuk PQ (tidak ada breaking change nanti)
+  ✦ Derive SPHINCS+ keypair di background (sudah tersedia, belum dipakai)
+
+Phase PQ-2 — Hybrid Active (Target: @noble/post-quantum stable)
+  ✦ Semua block baru: Ed25519 + SPHINCS+ anchor setiap 50 blocks
+  ✦ Vault sharing (F8): X25519 DIGANTI ML-KEM-768
+  ✦ UI: tampilkan badge "Quantum-Resistant Vault"
+  ✦ Retroactive PQ anchor: generate SPHINCS+ anchor untuk chain lama
+  ✦ Chain verification: valid jika Ed25519 valid (PQ sebagai bonus)
+
+Phase PQ-3 — Post-Quantum Only (Era Quantum)
+  ✦ Ed25519 signature deprecated — tidak lagi diterima sebagai single-valid
+  ✦ Hanya block dengan SPHINCS+ signature yang diterima sebagai fully verified
+  ✦ Ed25519 tetap ada sebagai legacy info, bukan security primitive
+  ✦ ML-KEM sebagai satu-satunya key encapsulation method
+```
+
+---
+
+#### Konteks Industri: Chain yang Sudah Migrasi
+
+Banyak blockchain dan sistem kriptografi mulai atau sudah merencanakan migrasi PQ:
+
+| Proyek | Status | Pendekatan |
+|---|---|---|
+| **Ethereum** | Roadmap aktif | Migrasi ke Verkle Trees + PQ signature jangka panjang |
+| **Signal Protocol** | ✅ Selesai (2023) | Hybrid PQXDH: X25519 + CRYSTALS-Kyber untuk key agreement |
+| **Apple iMessage** | ✅ Selesai (2024) | PQ3: ML-KEM untuk forward secrecy |
+| **Google Chrome** | ✅ Selesai (2024) | ML-KEM-768 untuk TLS key exchange |
+| **OpenSSH 9.0+** | ✅ Selesai (2022) | CRYSTALS-Kyber hybrid untuk key exchange |
+| **Cloudflare** | ✅ Aktif | ML-KEM di TLS 1.3 untuk semua traffic |
+| **NIST** | ✅ Final (2024) | FIPS 203 (ML-KEM), FIPS 204 (ML-DSA), FIPS 205 (SLH-DSA/SPHINCS+) |
+
+Password manager menyimpan data lebih lama dari session TLS — justifikasi untuk PQ **lebih kuat** di konteks ini dibanding TLS.
 
 ---
 
@@ -393,13 +591,16 @@ Server tidak bisa membaca `payload` — tetap zero-knowledge. `public_key` dan `
 ```
 src/lib/crypto/
   ├── seedphrase.ts      — BIP-39 generate, validate, entropy extraction
-  ├── hd-keys.ts         — HD key derivation (BIP-32 inspired)
+  ├── hd-keys.ts         — HD key derivation (BIP-32 inspired), termasuk path m/pq/*
   ├── keypair.ts         — Ed25519 keypair derivation, sign, verify; X25519 ECDH untuk sharing
+  ├── post-quantum.ts    — SPHINCS+-SHA2-256s signing/verify; ML-KEM-768 encapsulate/decapsulate
+  ├── hybrid-sig.ts      — Hybrid signature bundle: Ed25519 || SPHINCS+, verify kedua-duanya
   ├── block-cipher.ts    — AES-256-GCM encrypt/decrypt, non-extractable CryptoKey management
-  ├── chain.ts           — Block creation, chain assembly, integrity + signature verification
+  ├── chain.ts           — Block creation, chain assembly, integrity + hybrid signature verification
+  ├── pq-anchor.ts       — PQ Anchor Block: merkle root setiap 50 blocks, signed SPHINCS+
   ├── secure-enclave.ts  — WebAuthn credential binding, key wrapping/unwrapping (Secure Enclave)
   ├── session-guard.ts   — Auto-lock timer, Page Visibility listener, memory scrubbing
-  ├── sharing.ts         — Ephemeral ECDH credential sharing (F8)
+  ├── sharing.ts         — Vault sharing: X25519 ECDH (Phase PQ-1) → ML-KEM-768 (Phase PQ-2)
   ├── device-auth.ts     — Device keypair, authorization, revoke & emergency kill (F9, F10)
   ├── canary.ts          — Canary block injection & monitoring (F11)
   ├── sss.ts             — Shamir's Secret Sharing split/combine
@@ -802,6 +1003,10 @@ CREATE TABLE canary_blocks (
 | **WebAuthn browser support** | Secure Enclave via WebAuthn membutuhkan browser modern + hardware yang support (TouchID, Windows Hello, YubiKey). Fallback: PIN-based key wrapping dengan Argon2id. |
 | **Canary false positives** | Credential canary yang "bocor" bisa terjadi karena breach di sisi layanan target (misal AWS breach), bukan karena vault dikompromis. Investigasi manual tetap diperlukan. |
 | **T5 tidak bisa di-mitigasi sepenuhnya** | Jika vault aktif dan device dicuri secara fisik, data yang sudah di-decrypt di memori tidak bisa diselamatkan. Auto-lock agresif adalah mitigasi terbaik yang mungkin. |
+| **SPHINCS+ ukuran signature besar** | 7,856 bytes per signature vs 64 bytes Ed25519. Mitigasi: PQ Anchor Block setiap 50 blocks — satu SPHINCS+ signature cover banyak block. Chain 1,000 blocks = hanya 20 SPHINCS+ signatures (153 KB). |
+| **SPHINCS+ lambat di browser** | ~6 operasi/detik saat signing via WASM. Mitigasi: signing dilakukan background worker, tidak blocking UI. Verification (~130 ops/detik) cukup cepat untuk chain walk. |
+| **@noble/post-quantum masih beta** | Library PQ dari Paul Miller masih dalam pengembangan aktif. Mitigasi: implementasi PQ sebagai Phase PQ-1 terpisah; tidak memblokir Phase 1-3 yang menggunakan classical crypto. |
+| **ML-KEM menggantikan X25519 (breaking change F8)** | Vault sharing yang dibuat di Phase PQ-1 menggunakan X25519; setelah PQ-2, format berubah ke ML-KEM. Mitigasi: versi protokol sharing (`v1: X25519`, `v2: ML-KEM`) agar backward compatible. |
 
 ---
 
@@ -846,6 +1051,27 @@ Phase 5 — Keypair & Social Features
   ✦ Multi-device authorization UI (F9) — QR code pairing
   ✦ Device revoke UI dengan signature
   ✦ Receive shared credential inbox
+
+Phase PQ-1 — Post-Quantum Foundation (parallel dengan Phase 1-2)
+  ✦ Integrasi @noble/post-quantum: SPHINCS+-SHA2-256s + ML-KEM-768
+  ✦ SPHINCS+ keypair derivation dari m/pq/sign/0
+  ✦ ML-KEM keypair derivation dari m/pq/kem/0
+  ✦ Block schema: tambah field signature_pq (nullable)
+  ✦ Unit tests post-quantum primitives
+
+Phase PQ-2 — Hybrid Active
+  ✦ Hybrid signature bundle: semua block baru dual-signed
+  ✦ PQ Anchor Block setiap 50 blocks (efisiensi storage)
+  ✦ Vault sharing (F8) migrasi ke ML-KEM-768
+  ✦ Retroactive PQ anchor untuk chain lama
+  ✦ UI badge "Quantum-Resistant Vault"
+  ✦ Detached signature store (chain_pq_signatures table)
+
+Phase PQ-3 — Post-Quantum Only (saat quantum threat nyata)
+  ✦ Ed25519 deprecated sebagai single-valid signature
+  ✦ SPHINCS+ sebagai primary security primitive
+  ✦ ML-KEM sebagai satu-satunya key encapsulation
+  ✦ Migration wizard untuk vault lama
 ```
 
 ---
@@ -867,3 +1093,9 @@ Phase 5 — Keypair & Social Features
 - [SubtleCrypto.importKey()](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/importKey) — Non-extractable CryptoKey API
 - [Page Visibility API](https://developer.mozilla.org/en-US/docs/Web/API/Page_Visibility_API) — Trigger auto-lock saat tab tidak aktif
 - [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/) — XSS & script injection prevention
+- [NIST FIPS 205 (SLH-DSA)](https://csrc.nist.gov/pubs/fips/205/final) — SPHINCS+ standar resmi post-quantum signature
+- [NIST FIPS 203 (ML-KEM)](https://csrc.nist.gov/pubs/fips/203/final) — CRYSTALS-Kyber standar resmi post-quantum key encapsulation
+- [NIST FIPS 204 (ML-DSA)](https://csrc.nist.gov/pubs/fips/204/final) — CRYSTALS-Dilithium, alternatif post-quantum signature (lebih cepat dari SPHINCS+)
+- [`@noble/post-quantum`](https://github.com/paulmillr/noble-post-quantum) — SPHINCS+ & ML-KEM untuk JavaScript/WASM, dari author @noble/curves
+- [SPHINCS+ Specification](https://sphincs.org/data/sphincs+-r3.1-specification.pdf) — Spesifikasi teknis lengkap
+- [Harvest Now Decrypt Later — CISA](https://www.cisa.gov/sites/default/files/2023-06/quantum-readiness_migration_guide_508.pdf) — Panduan migrasi post-quantum CISA
