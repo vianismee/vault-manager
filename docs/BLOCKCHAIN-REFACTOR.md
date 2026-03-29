@@ -23,6 +23,9 @@ Akses ke seluruh vault tidak lagi bergantung pada email magic link semata, melai
 | Tidak ada riwayat perubahan credential | Setiap edit menghasilkan block baru; riwayat lengkap tersimpan on-chain |
 | Enkripsi flat (satu kunci untuk semua) | HD key derivation: setiap kategori/vault punya kunci turunan unik |
 | Tidak ada deteksi tamper dari sisi server | Chain integrity check mendeteksi modifikasi yang tidak sah |
+| Tidak ada autentikasi identitas pengirim block | Setiap block ditandatangani dengan private key; siapa pun bisa verifikasi dengan public key |
+| Berbagi credential antar user tidak aman | Enkripsi dengan public key penerima — hanya penerima yang bisa dekripsi |
+| Multi-device butuh seedphrase dikirim ulang | Device baru diotorisasi via keypair; seedphrase tidak perlu berpindah |
 
 ---
 
@@ -42,8 +45,11 @@ Setiap credential entry direpresentasikan sebagai sebuah block:
 │  nonce           : random bytes (16)             │
 │  payload         : AES-256-GCM(credential_data) │
 │  block_hash      : SHA-256(semua field di atas)  │
+│  signature       : Ed25519Sign(block_hash, privKey) │
 └─────────────────────────────────────────────────┘
 ```
+
+Field `signature` ditambahkan: block ditandatangani dengan **private key** vault. Siapapun yang memiliki **public key** bisa memverifikasi bahwa block ini benar-benar dibuat oleh pemilik vault — tanpa perlu tahu isi payload.
 
 **Genesis Block** (Block 0) adalah block khusus yang menyimpan metadata vault (dibuat saat vault pertama kali diinisialisasi) dengan `prev_hash = "0000...0000"`.
 
@@ -80,7 +86,12 @@ Seedphrase (12/24 kata)
         ├─── m/vault/0  ──▶  Vault Encryption Key (AES-256)
         ├─── m/vault/1  ──▶  Backup/Recovery Key
         ├─── m/hmac/0   ──▶  Block HMAC Signing Key
-        └─── m/cat/N    ──▶  Per-Category Derived Key (N = category index)
+        ├─── m/cat/N    ──▶  Per-Category Derived Key (N = category index)
+        │
+        └─── m/identity/0
+                │
+                ├── Private Key (Ed25519)  ──▶  block signing, dekripsi shared data
+                └── Public Key  (Ed25519)  ──▶  vault identity, verifikasi, enkripsi untuk orang lain
 ```
 
 Derivasi mengikuti pola **BIP-32 Hierarchical Deterministic (HD)** yang dimodifikasi untuk non-blockchain environment:
@@ -120,6 +131,48 @@ current_state = {
 ```
 
 Proses ini dilakukan di client setelah decrypt semua blocks. Server tidak pernah tahu isi state.
+
+---
+
+### 5. Public Key & Private Key Layer
+
+Selain kunci simetris untuk enkripsi payload, arsitektur ini menggunakan **kriptografi asimetris (Ed25519)** yang diturunkan dari path `m/identity/0` pada master seed.
+
+#### Peran masing-masing kunci:
+
+```
+Private Key (Ed25519)
+  ├── Menandatangani setiap block (signature field)
+  ├── Mendekripsi data yang dienkripsi khusus untuk vault ini
+  └── Mengesahkan otorisasi device baru
+
+Public Key (Ed25519 → X25519 untuk enkripsi)
+  ├── Memverifikasi signature block (siapapun bisa, tanpa private key)
+  ├── Identitas unik vault (seperti "alamat" di blockchain)
+  └── Digunakan orang lain untuk mengenkripsi data yang hanya bisa dibaca vault ini
+```
+
+#### Hubungan simetris vs asimetris:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     OPERASI KRIPTOGRAFI                      │
+├────────────────────┬────────────────────────────────────────┤
+│  Enkripsi payload  │  AES-256-GCM (symmetric, derived key)  │
+│  Tanda tangan block│  Ed25519 (private key)                  │
+│  Verifikasi block  │  Ed25519 (public key)                   │
+│  Berbagi credential│  X25519 ECDH + AES (public key penerima)│
+│  Device auth       │  Ed25519 (device keypair + vault privkey)│
+└────────────────────┴────────────────────────────────────────┘
+```
+
+#### Kenapa Ed25519 bukan secp256k1 (Bitcoin curve)?
+
+Ed25519 dipilih karena:
+- Signature lebih cepat dan lebih pendek (64 bytes vs 71 bytes DER)
+- Tidak rentan terhadap nonce reuse attack (deterministik by design)
+- Didukung natively di Web Crypto API (`sign/verify` dengan `Ed25519`)
+- Konversi ke X25519 untuk ECDH (key exchange) sangat mudah — satu keypair bisa melayani keduanya
 
 ---
 
@@ -229,6 +282,52 @@ Mirip dengan git rebase — konflik diselesaikan secara deterministik berdasarka
 
 ---
 
+### F8 — Vault Sharing via Public Key
+
+User bisa berbagi satu credential (atau satu kategori) ke user lain **tanpa mengekspos private key atau seedphrase**:
+
+```
+Alice ingin share credential "Netflix" ke Bob:
+
+1. Alice ambil Public Key Bob (dari vault address Bob)
+2. Alice generate ephemeral keypair (sekali pakai)
+3. Alice lakukan ECDH: shared_secret = ECDH(Alice_ephemeral_privkey, Bob_pubkey)
+4. Enkripsi credential dengan AES(shared_secret)
+5. Kirim: { ephemeral_pubkey, encrypted_credential } ke Bob
+
+Bob mendekripsi:
+  shared_secret = ECDH(Bob_privkey, ephemeral_pubkey)
+  credential    = AES_decrypt(shared_secret, encrypted_credential)
+```
+
+Bob tidak perlu tahu seedphrase Alice. Alice tidak perlu tahu private key Bob. Server tidak bisa membaca isinya.
+
+---
+
+### F9 — Multi-Device Authorization via Keypair
+
+Menambahkan device baru **tidak memerlukan pengiriman ulang seedphrase**:
+
+```
+[Device Baru]                          [Device Lama / Trusted]
+      │                                          │
+      │ 1. Generate device keypair               │
+      │    (device_privkey, device_pubkey)        │
+      │                                          │
+      │ 2. Kirim device_pubkey + request ────▶   │
+      │                                          │ 3. Owner verifikasi (approve di UI)
+      │                                          │ 4. Enkripsi vault_master_key dengan
+      │                                          │    device_pubkey
+      │ 5. Terima encrypted_vault_key    ◀────   │
+      │                                          │
+      │ 6. Dekripsi dengan device_privkey        │
+      │ 7. Vault terbuka tanpa seedphrase        │
+```
+
+**Revoke device**: Owner menandatangani pesan revoke dengan private key → device yang direvoke tidak bisa lagi mengambil blocks baru dari server (server verifikasi signature revoke).
+
+---
+
 ## Perubahan Arsitektur
 
 ### Data Model (PostgreSQL)
@@ -266,9 +365,26 @@ CREATE TABLE chain_blocks (
 );
 
 CREATE INDEX idx_blocks_chain_index ON chain_blocks(chain_id, block_index);
+
+-- Public key vault (identitas, verifikasi signature)
+CREATE TABLE vault_identities (
+  chain_id   UUID PRIMARY KEY REFERENCES vault_chains(id),
+  public_key TEXT NOT NULL  -- Ed25519 public key (hex/base64)
+);
+
+-- Device registry untuk multi-device auth (F9)
+CREATE TABLE authorized_devices (
+  id             UUID PRIMARY KEY,
+  chain_id       UUID REFERENCES vault_chains(id),
+  device_pubkey  TEXT NOT NULL,
+  label          TEXT,          -- "iPhone 15", "MacBook Pro"
+  authorized_at  TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at     TIMESTAMPTZ,
+  revoke_sig     TEXT           -- signature revoke dari vault private key
+);
 ```
 
-Server tidak bisa membaca `payload` — tetap zero-knowledge.
+Server tidak bisa membaca `payload` — tetap zero-knowledge. `public_key` dan `device_pubkey` boleh publik — tidak mengekspos data credential.
 
 ---
 
@@ -278,8 +394,11 @@ Server tidak bisa membaca `payload` — tetap zero-knowledge.
 src/lib/crypto/
   ├── seedphrase.ts      — BIP-39 generate, validate, entropy extraction
   ├── hd-keys.ts         — HD key derivation (BIP-32 inspired)
+  ├── keypair.ts         — Ed25519 keypair derivation, sign, verify; X25519 ECDH untuk sharing
   ├── block-cipher.ts    — AES-256-GCM encrypt/decrypt per block
-  ├── chain.ts           — Block creation, chain assembly, integrity verification
+  ├── chain.ts           — Block creation, chain assembly, integrity + signature verification
+  ├── sharing.ts         — Ephemeral ECDH credential sharing (F8)
+  ├── device-auth.ts     — Device keypair, authorization & revoke flow (F9)
   ├── sss.ts             — Shamir's Secret Sharing split/combine
   └── index.ts           — Public API exports
 ```
@@ -341,6 +460,8 @@ Verify chain integrity
 | **Seedphrase hilang = vault hilang** | Ini by design (zero-knowledge), tapi perlu UX yang sangat jelas saat onboarding. SSS (F4) adalah mitigasi utama. |
 | **Storage server bertambah** | UPDATE/DELETE tidak menimpa data lama. Vault dengan riwayat panjang akan menggunakan lebih banyak storage. Mitigasi: **chain compaction** (opsional, merges blocks ke snapshot terenkripsi). |
 | **Kompleksitas implementasi** | Jauh lebih kompleks dari CRUD biasa. Perlu crypto module yang solid dan diuji secara ekstensif. |
+| **Key rotation** | Jika private key terekspos, semua signature lama tetap valid. Mitigasi: buat keypair baru, tandatangani ulang HEAD block sebagai "key rotation event", invalidasi keypair lama di server. |
+| **Public key discovery** | Untuk F8 (vault sharing), user perlu tahu public key penerima. Perlu mekanisme directory sederhana (user share vault address mereka secara manual). |
 
 ---
 
@@ -350,8 +471,10 @@ Verify chain integrity
 Phase 1 — Foundation (Core Crypto)
   ✦ Implementasi seedphrase generation (BIP-39)
   ✦ HD key derivation module
+  ✦ Ed25519 keypair derivation dari m/identity/0
   ✦ Block structure & AES-256-GCM cipher
-  ✦ Chain assembly & integrity verification
+  ✦ Block signing (Ed25519) & signature verification
+  ✦ Chain assembly & integrity + signature verification
   ✦ Unit tests untuk semua crypto primitives
 
 Phase 2 — Data Layer
@@ -371,6 +494,13 @@ Phase 4 — Advanced Features
   ✦ Vault snapshot export/import (F5)
   ✦ Shamir's Secret Sharing UI (F4)
   ✦ Per-category key isolation (F6)
+
+Phase 5 — Keypair & Social Features
+  ✦ Vault identity page (tampilkan public key / vault address)
+  ✦ Credential sharing via public key (F8) — UI + ECDH flow
+  ✦ Multi-device authorization UI (F9) — QR code pairing
+  ✦ Device revoke UI dengan signature
+  ✦ Receive shared credential inbox
 ```
 
 ---
@@ -385,3 +515,6 @@ Phase 4 — Advanced Features
 - [`@scure/bip39`](https://github.com/paulmillr/scure-bip39) — Library BIP-39 yang audited
 - [`@scure/bip32`](https://github.com/paulmillr/scure-bip32) — Library BIP-32 yang audited
 - [`secrets.js-grempe`](https://github.com/grempe/secrets.js) — Shamir's Secret Sharing untuk JS
+- [`@noble/curves`](https://github.com/paulmillr/noble-curves) — Ed25519 & X25519 yang audited, zero-dependency
+- [Ed25519 RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) — EdDSA signature standard
+- [X25519 / ECDH RFC 7748](https://www.rfc-editor.org/rfc/rfc7748) — Elliptic curve Diffie-Hellman untuk key exchange
