@@ -6,13 +6,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Copy, Check, Eye, EyeOff, ExternalLink, Trash2, Edit, Key, Shield, FileText, X } from "lucide-react";
+import { Copy, Check, Eye, EyeOff, ExternalLink, Trash2, Edit, Shield, FileText, X, Clock } from "lucide-react";
 import { useState } from "react";
 import { decrypt } from "@/lib/encryption";
 import { TOTPDisplay } from "@/components/totp/totp-display";
 import { toast } from "sonner";
 import { Credential } from "./vault-list";
 import { getFaviconUrl, generatePlaceholder } from "@/lib/icons";
+import { CredentialHistory } from "./credential-history";
 
 interface VaultDetailDialogProps {
   open: boolean;
@@ -32,10 +33,11 @@ export function VaultDetailDialog({
   const [showPassword, setShowPassword] = useState(false);
   const [copied, setCopied] = useState<"password" | "username" | null>(null);
   const [imgError, setImgError] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   if (!credential) return null;
 
-  const password = showPassword ? decrypt(credential.passwordEncrypted) : "••••••••";
+  const password = showPassword ? (credential.password ?? decrypt(credential.passwordEncrypted)) : "••••••••";
   const faviconUrl = credential.websiteUrl && !imgError ? getFaviconUrl(credential.websiteUrl) : null;
   const placeholder = generatePlaceholder(credential.title);
 
@@ -148,7 +150,7 @@ export function VaultDetailDialog({
                 size="icon"
                 variant="ghost"
                 className="h-10 w-10 flex-shrink-0"
-                onClick={() => handleCopy(decrypt(credential.passwordEncrypted), "password")}
+                onClick={() => handleCopy(credential.password ?? decrypt(credential.passwordEncrypted), "password")}
               >
                 {copied === "password" ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
               </Button>
@@ -189,6 +191,15 @@ export function VaultDetailDialog({
 
         {/* Actions */}
         <div className="px-6 py-4 border-t border-border flex gap-3">
+          <Button
+            variant="outline"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setHistoryOpen(true)}
+            title="Version history"
+          >
+            <Clock className="h-4 w-4" />
+          </Button>
           {onEdit && (
             <Button
               variant="outline"
@@ -211,6 +222,13 @@ export function VaultDetailDialog({
           )}
         </div>
       </DialogContent>
+
+      <CredentialHistory
+        credentialId={credential.id}
+        credentialTitle={credential.title}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+      />
     </Dialog>
   );
 }

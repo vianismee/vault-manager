@@ -4,7 +4,9 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { encrypt } from "@/lib/encryption";
+import { useVault } from "@/contexts/vault-context";
+import { createBlock, type CredentialPayload } from "@/lib/crypto/chain";
+import { useCategories } from "@/lib/realtime/hooks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,6 +21,9 @@ import { CategoryManager } from "@/components/categories/category-manager";
 
 export default function NewCredentialPage() {
   const router = useRouter();
+  const { vaultKey, privateKey, chainId } = useVault();
+  const { data: categories } = useCategories();
+
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showTotpSecret, setShowTotpSecret] = useState(false);
@@ -31,25 +36,64 @@ export default function NewCredentialPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!vaultKey || !privateKey || !chainId) {
+      toast.error("Seedphrase unlock required to add credentials");
+      return;
+    }
+
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-      const { error } = await supabase.from("passwords").insert({
-        user_id: user.id,
+      // Get chain HEAD
+      const { data: headRow, error: headError } = await supabase
+        .from("chain_blocks")
+        .select("block_hash, block_index")
+        .eq("chain_id", chainId)
+        .order("block_index", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (headError || !headRow) throw new Error("Chain HEAD not found");
+
+      const credentialId = crypto.randomUUID();
+      const categoryName = categories?.find((c) => c.id === selectedCategoryId)?.name;
+
+      const payload: CredentialPayload = {
+        id: credentialId,
+        op: "CREATE",
         title: formData.title,
-        username: formData.username || null,
-        encrypted_password: encrypt(formData.password),
-        url: formData.websiteUrl || null,
-        totp_secret: formData.totpSecret || null,
-        notes: formData.notes || null,
-        category_id: selectedCategoryId,
+        username: formData.username || undefined,
+        password: formData.password,
+        url: formData.websiteUrl || undefined,
+        totp_secret: formData.totpSecret || undefined,
+        tags: categoryName ? [categoryName] : [],
+        notes: formData.notes || undefined,
+        original_created_at: new Date().toISOString(),
+      };
+
+      const block = await createBlock({
+        block_index: (headRow.block_index as number) + 1,
+        prev_hash: headRow.block_hash as string,
+        payload,
+        vaultKey,
+        privateKey,
       });
-      if (error) throw error;
+
+      const res = await fetch("/api/blocks/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chain_id: chainId, ...block }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "Block append failed");
+      }
+
       toast.success("Password saved");
       router.push("/vault");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to save");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to save");
     } finally {
       setLoading(false);
     }
@@ -90,7 +134,6 @@ export default function NewCredentialPage() {
           </Link>
         </nav>
 
-        {/* Current action indicator */}
         <div className="px-4 py-3 border-t border-border/40">
           <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-primary/8">
             <Key className="h-3.5 w-3.5 text-primary shrink-0" />
@@ -208,7 +251,6 @@ export default function NewCredentialPage() {
               <p className="section-label mb-4">Password</p>
 
               <div className="space-y-4">
-                {/* Password input */}
                 <div className="space-y-1.5">
                   <label htmlFor="password" className="font-accent text-xs font-semibold text-muted-foreground">
                     Password <span className="text-destructive">*</span>
@@ -232,7 +274,6 @@ export default function NewCredentialPage() {
                     </button>
                   </div>
 
-                  {/* Strength bar */}
                   {strength?.label && (
                     <div className="flex items-center gap-3 pt-1">
                       <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden">
@@ -248,7 +289,6 @@ export default function NewCredentialPage() {
                   )}
                 </div>
 
-                {/* Generator */}
                 <div className="border-t border-border/40 pt-4">
                   <p className="section-label mb-3">Generator</p>
                   <PasswordGenerator
@@ -263,7 +303,6 @@ export default function NewCredentialPage() {
               <p className="section-label mb-4">Security & Notes</p>
 
               <div className="space-y-4">
-                {/* TOTP */}
                 <div className="space-y-1.5">
                   <label htmlFor="totpSecret" className="font-accent text-xs font-semibold text-muted-foreground">
                     2FA secret (TOTP)
@@ -291,7 +330,6 @@ export default function NewCredentialPage() {
                   </div>
                 </div>
 
-                {/* Notes */}
                 <div className="space-y-1.5 border-t border-border/40 pt-4">
                   <label htmlFor="notes" className="font-accent text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
                     <FileText className="h-3 w-3" />
@@ -320,7 +358,11 @@ export default function NewCredentialPage() {
               >
                 Cancel
               </Button>
-              <Button type="submit" className="btn-primary px-8" disabled={loading}>
+              <Button
+                type="submit"
+                className="btn-primary px-8"
+                disabled={loading}
+              >
                 {loading ? (
                   <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />Saving...</>
                 ) : (

@@ -6,6 +6,9 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
 
+  // First exchange code for session if present
+  let userNeedsOnboarding = false;
+
   if (code) {
     const cookieStore = await cookies();
     const supabase = createServerClient(
@@ -31,8 +34,29 @@ export async function GET(request: Request) {
       }
     );
     await supabase.auth.exchangeCodeForSession(code);
+
+    // Check if user has a vault chain immediately after code exchange
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: chain } = await supabase
+        .from("vault_chains")
+        .select("id")
+        .eq("user_id", user.id)
+        .maybeSingle(); // Use maybeSingle to handle no results without error
+
+      // No vault chain means user needs onboarding
+      if (!chain) {
+        userNeedsOnboarding = true;
+      }
+    }
   }
 
-  // URL to redirect to after sign in process completes
-  return NextResponse.redirect(new URL("/vault", requestUrl.origin));
+  // Determine redirect target
+  // If user has no vault chain → onboarding
+  // Otherwise → vault (middleware will handle lock screen)
+  const redirectUrl = userNeedsOnboarding
+    ? new URL("/onboarding", requestUrl.origin)
+    : new URL("/vault", requestUrl.origin);
+
+  return NextResponse.redirect(redirectUrl);
 }

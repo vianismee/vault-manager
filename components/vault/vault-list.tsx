@@ -6,6 +6,9 @@ export interface Credential {
   id: string;
   title: string;
   username?: string;
+  /** Plaintext password decrypted from chain replay (new system). */
+  password?: string;
+  /** Legacy CryptoJS-encrypted password (old system, kept for backward compat). */
   passwordEncrypted: string;
   websiteUrl?: string;
   totpSecret?: string;

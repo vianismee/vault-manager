@@ -17,19 +17,68 @@ import {
   Shield,
   Key,
   ChevronRight,
+  AlertTriangle,
+  Loader2,
+  History,
+  FileDown,
+  FileUp,
+  GitBranch,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { isMobile } from "@/lib/mobile";
+import { clearEnclaveData } from "@/lib/crypto/secure-enclave";
 
 export default function SettingsPage() {
   const router = useRouter();
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [killSwitchConfirm, setKillSwitchConfirm] = useState(false);
+  const [killSwitchLoading, setKillSwitchLoading] = useState(false);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     router.push("/auth/login");
+  };
+
+  /** Emergency Kill Switch (TASK-021, SEC-006) */
+  const handleEmergencyKillSwitch = async () => {
+    if (!killSwitchConfirm) {
+      setKillSwitchConfirm(true);
+      return;
+    }
+    setKillSwitchLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      // 1. Freeze vault chain
+      await supabase
+        .from("vault_chains")
+        .update({ status: "frozen" })
+        .eq("user_id", user.id);
+
+      // 2. Revoke all authorized devices
+      await supabase
+        .from("authorized_devices")
+        .update({ revoked_at: new Date().toISOString() })
+        .eq("user_id", user.id)
+        .is("revoked_at", null);
+
+      // 3. Clear local enclave data (wrapped keys, WebAuthn credential)
+      await clearEnclaveData();
+
+      // 4. Sign out (invalidates JWT)
+      await supabase.auth.signOut();
+
+      toast.success("Emergency Kill Switch activated — vault frozen and all devices revoked.");
+      router.push("/auth/login");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Kill switch failed");
+      setKillSwitchLoading(false);
+      setKillSwitchConfirm(false);
+    }
   };
 
   const handleImportComplete = () => {
@@ -186,6 +235,37 @@ export default function SettingsPage() {
             </div>
           </section>
 
+          {/* Security Chain Section */}
+          <section>
+            <h2 className="text-sm font-medium text-muted-foreground mb-3 px-1">Secure Chain</h2>
+            <div className="bg-card border border-border rounded-xl overflow-hidden divide-y divide-border">
+              <SettingsItem
+                icon={<History className="h-5 w-5" />}
+                title="Audit Log"
+                description="View tamper-evident chain history"
+                onClick={() => router.push("/vault/audit")}
+              />
+              <SettingsItem
+                icon={<FileDown className="h-5 w-5" />}
+                title="Export Vault Snapshot"
+                description="Download encrypted chain backup"
+                onClick={() => router.push("/vault/snapshot?action=export")}
+              />
+              <SettingsItem
+                icon={<FileUp className="h-5 w-5" />}
+                title="Import Vault Snapshot"
+                description="Restore from encrypted backup"
+                onClick={() => router.push("/vault/snapshot?action=import")}
+              />
+              <SettingsItem
+                icon={<GitBranch className="h-5 w-5" />}
+                title="Seedphrase Backup (SSS)"
+                description="Split seedphrase into recovery shares"
+                onClick={() => router.push("/vault/sss")}
+              />
+            </div>
+          </section>
+
           {/* Account Section */}
           <section>
             <h2 className="text-sm font-medium text-muted-foreground mb-3 px-1">Account</h2>
@@ -213,6 +293,65 @@ export default function SettingsPage() {
             <LogOut className="h-5 w-5" />
             <span className="font-medium">Sign Out</span>
           </button>
+
+          {/* Danger Zone — Emergency Kill Switch */}
+          <section>
+            <h2 className="text-sm font-medium text-destructive/70 mb-3 px-1">Danger Zone</h2>
+            <div className="bg-card border border-destructive/20 rounded-xl overflow-hidden p-4 space-y-3">
+              <div className="flex items-start gap-3">
+                <Zap className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-sm">Emergency Kill Switch</p>
+                  <p className="font-accent text-xs text-muted-foreground mt-0.5">
+                    Immediately freeze your vault, revoke all authorized devices, and sign out from all sessions. This cannot be undone without your seedphrase.
+                  </p>
+                </div>
+              </div>
+              {killSwitchConfirm ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/30">
+                    <AlertTriangle className="h-4 w-4 text-destructive shrink-0" />
+                    <p className="font-accent text-xs text-destructive font-medium">
+                      This will lock your vault and revoke all devices. Are you sure?
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setKillSwitchConfirm(false)}
+                      disabled={killSwitchLoading}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="flex-1 bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                      onClick={handleEmergencyKillSwitch}
+                      disabled={killSwitchLoading}
+                    >
+                      {killSwitchLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        "Activate Kill Switch"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                  onClick={handleEmergencyKillSwitch}
+                >
+                  <Zap className="h-3.5 w-3.5 mr-1.5" />
+                  Activate Emergency Kill Switch
+                </Button>
+              )}
+            </div>
+          </section>
         </div>
       </main>
 

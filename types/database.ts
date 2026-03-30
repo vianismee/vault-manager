@@ -260,6 +260,139 @@ export type Database = {
         }
         Relationships: []
       }
+      vault_chains: {
+        Row: {
+          id: string
+          user_id: string
+          public_key: string
+          status: string | null
+          migration_status: string | null
+          migrated_from_legacy: boolean | null
+          created_at: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          public_key?: string
+          status?: string | null
+          migration_status?: string | null
+          migrated_from_legacy?: boolean | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          public_key?: string
+          status?: string | null
+          migration_status?: string | null
+          migrated_from_legacy?: boolean | null
+          created_at?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      chain_blocks: {
+        Row: {
+          id: string
+          chain_id: string
+          block_index: number
+          prev_hash: string
+          timestamp: string | null
+          nonce: string
+          payload: string
+          block_hash: string
+          signature: string
+          signature_pq: string | null
+          canary: boolean | null
+          legacy_row_id: string | null
+        }
+        Insert: {
+          id?: string
+          chain_id: string
+          block_index: number
+          prev_hash: string
+          timestamp?: string | null
+          nonce: string
+          payload: string
+          block_hash: string
+          signature: string
+          signature_pq?: string | null
+          canary?: boolean | null
+          legacy_row_id?: string | null
+        }
+        Update: {
+          id?: string
+          chain_id?: string
+          block_index?: number
+          prev_hash?: string
+          timestamp?: string | null
+          nonce?: string
+          payload?: string
+          block_hash?: string
+          signature?: string
+          signature_pq?: string | null
+          canary?: boolean | null
+          legacy_row_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chain_blocks_chain_id_fkey"
+            columns: ["chain_id"]
+            isOneToOne: false
+            referencedRelation: "vault_chains"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      authorized_devices: {
+        Row: {
+          id: string
+          chain_id: string
+          user_id: string
+          device_pubkey: string
+          device_name: string | null
+          encrypted_vault_key: string | null
+          status: string | null
+          revoke_signature: string | null
+          created_at: string | null
+          revoked_at: string | null
+        }
+        Insert: {
+          id?: string
+          chain_id: string
+          user_id: string
+          device_pubkey: string
+          device_name?: string | null
+          encrypted_vault_key?: string | null
+          status?: string | null
+          revoke_signature?: string | null
+          created_at?: string | null
+          revoked_at?: string | null
+        }
+        Update: {
+          id?: string
+          chain_id?: string
+          user_id?: string
+          device_pubkey?: string
+          device_name?: string | null
+          encrypted_vault_key?: string | null
+          status?: string | null
+          revoke_signature?: string | null
+          created_at?: string | null
+          revoked_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "authorized_devices_chain_id_fkey"
+            columns: ["chain_id"]
+            isOneToOne: false
+            referencedRelation: "vault_chains"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       [_ in never]: never

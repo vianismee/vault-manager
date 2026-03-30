@@ -86,12 +86,19 @@ export default function LoginPage() {
 
       if (error) throw error;
 
+      // Check if user has a vault chain to determine redirect
+      const { data: chain } = await supabase
+        .from("vault_chains")
+        .select("id")
+        .eq("user_id", data.user.id)
+        .maybeSingle();
+
       toast({
         title: "Welcome back",
         description: "You're now signed in.",
       });
 
-      router.push("/vault");
+      router.push(chain ? "/vault" : "/onboarding");
     } catch (error: any) {
       toast({
         title: "Sign in failed",
@@ -129,6 +136,16 @@ export default function LoginPage() {
       });
 
       if (error) throw error;
+
+      // If session is active immediately (auto-confirm), redirect to onboarding
+      if (data.session) {
+        toast({
+          title: "Account created",
+          description: "Let's set up your secure vault.",
+        });
+        router.push("/onboarding");
+        return;
+      }
 
       toast({
         title: "Account created",

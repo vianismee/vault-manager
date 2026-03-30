@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { encrypt, decrypt } from "@/lib/encryption";
+import { useVault } from "@/contexts/vault-context";
+import { replayChain, createBlock, type ChainBlock, type CredentialPayload } from "@/lib/crypto/chain";
+import { useCategories } from "@/lib/realtime/hooks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, Eye, EyeOff, Loader2, Folder, Settings } from "lucide-react";
+import {
+  ArrowLeft, Eye, EyeOff, Loader2, Settings,
+} from "lucide-react";
 import { toast } from "sonner";
 import { PasswordGenerator, getPasswordStrength } from "@/components/password/password-generator";
 import { PasswordFormSkeleton } from "@/components/vault/vault-skeleton";
@@ -17,6 +21,9 @@ export default function EditCredentialPage() {
   const router = useRouter();
   const params = useParams();
   const id = params.id as string;
+
+  const { vaultKey, privateKey, chainId } = useVault();
+  const { data: categories } = useCategories();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -33,90 +40,126 @@ export default function EditCredentialPage() {
     notes: "",
   });
 
-  // Fetch existing credential
-  useEffect(() => {
-    if (id) {
-      fetchCredential();
-    }
-  }, [id]);
-
-  const fetchCredential = async () => {
+  const fetchCredential = useCallback(async () => {
+    if (!vaultKey || !chainId) return;
     try {
       setLoading(true);
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push("/auth/login"); return; }
 
-      if (!user) {
-        router.push("/auth/login");
-        return;
-      }
-
-      const { data, error } = await supabase
-        .from("passwords")
+      const { data: rawBlocks, error: blocksError } = await supabase
+        .from("chain_blocks")
         .select("*")
-        .eq("id", id)
-        .eq("user_id", user.id)
-        .single();
+        .eq("chain_id", chainId)
+        .order("block_index", { ascending: true });
 
-      if (error) throw error;
-      if (!data) {
-        toast.error("Password not found");
+      if (blocksError) throw blocksError;
+
+      const blocks: ChainBlock[] = (rawBlocks ?? []).map((b: Record<string, unknown>) => ({
+        block_index: b.block_index as number,
+        prev_hash: b.prev_hash as string,
+        timestamp: b.timestamp as string,
+        nonce: b.nonce as string,
+        payload: b.payload as string,
+        block_hash: b.block_hash as string,
+        signature: b.signature as string,
+        signature_pq: b.signature_pq as string | undefined,
+        canary: b.canary as boolean | undefined,
+        legacy_row_id: b.legacy_row_id as string | undefined,
+      }));
+
+      const state = await replayChain(blocks, vaultKey);
+      const credential = state.get(id);
+
+      if (!credential) {
+        toast.error("Credential not found");
         router.push("/vault");
         return;
       }
 
       setFormData({
-        title: data.title,
-        username: data.username || "",
-        password: decrypt(data.encrypted_password),
-        websiteUrl: data.url || "",
-        totpSecret: data.totp_secret || "",
-        notes: data.notes || "",
+        title: credential.title ?? "",
+        username: credential.username ?? "",
+        password: credential.password ?? "",
+        websiteUrl: credential.url ?? "",
+        totpSecret: credential.totp_secret ?? "",
+        notes: credential.notes ?? "",
       });
-      setSelectedCategoryId(data.category_id || null);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to fetch password");
+
+      // Resolve category ID from stored tag name
+      if (credential.tags?.[0] && categories) {
+        const matched = categories.find((c) => c.name === credential.tags![0]);
+        setSelectedCategoryId(matched?.id ?? null);
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to load credential");
       router.push("/vault");
     } finally {
       setLoading(false);
     }
-  };
+  }, [vaultKey, chainId, id, categories, router]);
+
+  useEffect(() => {
+    fetchCredential();
+  }, [fetchCredential]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!vaultKey || !privateKey || !chainId) {
+      toast.error("Seedphrase unlock required to edit credentials");
+      return;
+    }
+
     setSaving(true);
-
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: headRow, error: headError } = await supabase
+        .from("chain_blocks")
+        .select("block_hash, block_index")
+        .eq("chain_id", chainId)
+        .order("block_index", { ascending: false })
+        .limit(1)
+        .single();
 
-      if (!user) {
-        throw new Error("Not authenticated");
+      if (headError || !headRow) throw new Error("Chain HEAD not found");
+
+      const categoryName = categories?.find((c) => c.id === selectedCategoryId)?.name;
+
+      const payload: CredentialPayload = {
+        id,
+        op: "UPDATE",
+        title: formData.title,
+        username: formData.username || undefined,
+        password: formData.password,
+        url: formData.websiteUrl || undefined,
+        totp_secret: formData.totpSecret || undefined,
+        tags: categoryName ? [categoryName] : [],
+        notes: formData.notes || undefined,
+      };
+
+      const block = await createBlock({
+        block_index: (headRow.block_index as number) + 1,
+        prev_hash: headRow.block_hash as string,
+        payload,
+        vaultKey,
+        privateKey,
+      });
+
+      const res = await fetch("/api/blocks/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chain_id: chainId, ...block }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "Block append failed");
       }
 
-      const { error } = await supabase
-        .from("passwords")
-        .update({
-          title: formData.title,
-          username: formData.username || null,
-          encrypted_password: encrypt(formData.password),
-          url: formData.websiteUrl || null,
-          totp_secret: formData.totpSecret || null,
-          notes: formData.notes || null,
-          category_id: selectedCategoryId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id)
-        .eq("user_id", user.id);
-
-      if (error) throw error;
-
-      toast.success("Password updated successfully");
+      toast.success("Password updated");
       router.push("/vault");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to update password");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
     } finally {
       setSaving(false);
     }
@@ -146,7 +189,6 @@ export default function EditCredentialPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="sticky top-0 z-10 border-b border-border/40 bg-background/80 backdrop-blur-md">
         <div className="container-main">
           <div className="flex h-16 items-center">
@@ -161,7 +203,6 @@ export default function EditCredentialPage() {
         </div>
       </header>
 
-      {/* Main content */}
       <main className="container-main py-8">
         <div className="max-w-xl mx-auto fade-in">
           <div className="mb-8">
@@ -181,9 +222,7 @@ export default function EditCredentialPage() {
                 id="title"
                 placeholder="e.g., Gmail, Netflix"
                 value={formData.title}
-                onChange={(e) =>
-                  setFormData({ ...formData, title: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                 required
                 className="input-clean"
               />
@@ -196,17 +235,14 @@ export default function EditCredentialPage() {
               </label>
               <Input
                 id="username"
-                type="text"
                 placeholder="john@example.com"
                 value={formData.username}
-                onChange={(e) =>
-                  setFormData({ ...formData, username: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                 className="input-clean"
               />
             </div>
 
-            {/* Password with Generator */}
+            {/* Password */}
             <div className="space-y-3 p-4 rounded-xl bg-muted/30 border border-border/40">
               <div className="space-y-1.5">
                 <label htmlFor="password" className="text-sm font-medium">
@@ -218,9 +254,7 @@ export default function EditCredentialPage() {
                     type={showPassword ? "text" : "password"}
                     placeholder="Enter or generate password"
                     value={formData.password}
-                    onChange={(e) =>
-                      setFormData({ ...formData, password: e.target.value })
-                    }
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                     required
                     className="input-clean pr-10"
                   />
@@ -229,51 +263,39 @@ export default function EditCredentialPage() {
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    {showPassword ? (
-                      <EyeOff className="h-4.5 w-4.5" />
-                    ) : (
-                      <Eye className="h-4.5 w-4.5" />
-                    )}
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
 
-                {/* Strength Indicator */}
-                {strength && strength.label && (
+                {strength?.label && (
                   <div className="flex items-center gap-3 mt-2">
                     <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
                       <div
-                        className={cn("h-full rounded-full transition-all duration-300", strength.bgColor)}
+                        className={`h-full rounded-full transition-all duration-300 ${strength.bgColor}`}
                         style={{ width: `${strength.percent}%` }}
                       />
                     </div>
-                    <span className={cn("text-xs font-medium", strength.color)}>
+                    <span className={`text-xs font-medium ${strength.color}`}>
                       {strength.label}
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Quick Generate Button */}
               <PasswordGenerator
-                onPasswordGenerated={(generatedPassword) => {
-                  setFormData({ ...formData, password: generatedPassword });
-                }}
+                onPasswordGenerated={(p) => setFormData({ ...formData, password: p })}
               />
             </div>
 
             {/* Website URL */}
             <div className="space-y-1.5">
-              <label htmlFor="websiteUrl" className="text-sm font-medium">
-                Website
-              </label>
+              <label htmlFor="websiteUrl" className="text-sm font-medium">Website</label>
               <Input
                 id="websiteUrl"
                 type="url"
                 placeholder="https://example.com"
                 value={formData.websiteUrl}
-                onChange={(e) =>
-                  setFormData({ ...formData, websiteUrl: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, websiteUrl: e.target.value })}
                 className="input-clean"
               />
             </div>
@@ -281,9 +303,7 @@ export default function EditCredentialPage() {
             {/* Category */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">
-                  Category
-                </label>
+                <label className="text-sm font-medium">Category</label>
                 <button
                   type="button"
                   onClick={() => setCategoryManagerOpen(true)}
@@ -293,13 +313,10 @@ export default function EditCredentialPage() {
                   Manage
                 </button>
               </div>
-              <CategorySelect
-                value={selectedCategoryId}
-                onChange={setSelectedCategoryId}
-              />
+              <CategorySelect value={selectedCategoryId} onChange={setSelectedCategoryId} />
             </div>
 
-            {/* TOTP Secret */}
+            {/* TOTP */}
             <div className="space-y-1.5">
               <label htmlFor="totpSecret" className="text-sm font-medium">
                 2FA secret (TOTP)
@@ -313,9 +330,7 @@ export default function EditCredentialPage() {
                   type={showTotpSecret ? "text" : "password"}
                   placeholder="JBSWY3DPEHPK3PXP (optional)"
                   value={formData.totpSecret}
-                  onChange={(e) =>
-                    setFormData({ ...formData, totpSecret: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, totpSecret: e.target.value })}
                   className="input-clean pr-10 font-mono text-sm"
                 />
                 <button
@@ -323,27 +338,19 @@ export default function EditCredentialPage() {
                   onClick={() => setShowTotpSecret(!showTotpSecret)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  {showTotpSecret ? (
-                    <EyeOff className="h-4.5 w-4.5" />
-                  ) : (
-                    <Eye className="h-4.5 w-4.5" />
-                  )}
+                  {showTotpSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
             </div>
 
             {/* Notes */}
             <div className="space-y-1.5">
-              <label htmlFor="notes" className="text-sm font-medium">
-                Notes
-              </label>
+              <label htmlFor="notes" className="text-sm font-medium">Notes</label>
               <textarea
                 id="notes"
                 placeholder="Additional notes or security questions..."
                 value={formData.notes}
-                onChange={(e) =>
-                  setFormData({ ...formData, notes: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                 rows={3}
                 className="flex min-h-[80px] w-full rounded-lg border border-border/60 bg-background px-4 py-2.5 text-[15px] text-foreground placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:border-ring/60 focus-visible:ring-1 focus-visible:ring-ring/20 transition-all resize-none"
               />
@@ -360,12 +367,13 @@ export default function EditCredentialPage() {
               >
                 Cancel
               </Button>
-              <Button type="submit" className="btn-primary flex-1" disabled={saving}>
+              <Button
+                type="submit"
+                className="btn-primary flex-1"
+                disabled={saving}
+              >
                 {saving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
-                  </>
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>
                 ) : (
                   "Save changes"
                 )}
@@ -375,7 +383,6 @@ export default function EditCredentialPage() {
         </div>
       </main>
 
-      {/* Category Manager Dialog */}
       <CategoryManager
         open={categoryManagerOpen}
         onOpenChange={setCategoryManagerOpen}
@@ -383,8 +390,4 @@ export default function EditCredentialPage() {
       />
     </div>
   );
-}
-
-function cn(...classes: (string | boolean | undefined)[]) {
-  return classes.filter(Boolean).join(" ");
 }
